@@ -1,4 +1,5 @@
-import { ChevronDown, ChevronUp, Upload, Pencil, X } from 'lucide-react'
+import { useState } from 'react'
+import { ChevronDown, ChevronUp, Upload, Pencil, X, Search, CloudDownload, Loader } from 'lucide-react'
 import ChipSelect from '../common/ChipSelect'
 import {
   merchantSizeOptions,
@@ -24,7 +25,32 @@ export default function AgreementSection({
   onEditAgreement,
   getAgreementStatus,
   isFieldDisabled,
+  onDriveSelect,
 }) {
+  const [driveSearchQuery, setDriveSearchQuery] = useState('')
+  const [driveResults, setDriveResults] = useState(null)
+  const [driveSearching, setDriveSearching] = useState(false)
+  const [driveMode, setDriveMode] = useState(false) // false=upload, true=drive
+
+  const handleDriveSearch = async () => {
+    if (!driveSearchQuery.trim()) return
+    setDriveSearching(true)
+    setDriveResults(null)
+    try {
+      const res = await fetch(`http://localhost:8000/api/drive/search?merchant=${encodeURIComponent(driveSearchQuery)}`)
+      const data = await res.json()
+      setDriveResults(data)
+    } catch (err) {
+      setDriveResults({ success: false, files: [], message: err.message })
+    }
+    setDriveSearching(false)
+  }
+
+  const handleDriveSelect = (file) => {
+    setDriveResults(null)
+    setDriveSearchQuery('')
+    if (onDriveSelect) onDriveSelect(file)
+  }
   return (
     <div className="rc-section">
       <div className="rc-section-header" onClick={() => setAgreementOpen(!agreementOpen)}>
@@ -75,32 +101,107 @@ export default function AgreementSection({
                 </div>
               )}
             </div>
-            <div className="rc-field">
-              <label>Rate Card PDF</label>
-              <input
-                type="file"
-                ref={rateCardInputRef}
-                onChange={(e) => {
-                  const file = e.target.files[0]
-                  if (file) onFileUpload(e, 'rateCard')
-                }}
-                accept=".pdf"
-                style={{ display: 'none' }}
-              />
-              {rateCardName ? (
-                <div className="rc-file-display rc-file-rate">
-                  <span className="rc-file-name" title={rateCardName}>
-                    {rateCardName}
-                  </span>
-                  <button className="rc-file-remove" onClick={onRemoveRateCard}>
-                    <X size={14} />
+            <div className="rc-field rc-rate-card-field">
+              <div className="rc-rate-label-row">
+                <label>Rate Card PDF</label>
+                <div className="rc-rate-toggle">
+                  <button
+                    className={`rc-toggle-btn ${!driveMode ? 'active' : ''}`}
+                    onClick={() => setDriveMode(false)}
+                  >
+                    <Upload size={12} /> Upload
+                  </button>
+                  <button
+                    className={`rc-toggle-btn ${driveMode ? 'active' : ''}`}
+                    onClick={() => setDriveMode(true)}
+                  >
+                    <CloudDownload size={12} /> Google Drive
                   </button>
                 </div>
+              </div>
+
+              {!driveMode ? (
+                /* Upload mode */
+                <>
+                  <input
+                    type="file"
+                    ref={rateCardInputRef}
+                    onChange={(e) => {
+                      const file = e.target.files[0]
+                      if (file) onFileUpload(e, 'rateCard')
+                    }}
+                    accept=".pdf"
+                    style={{ display: 'none' }}
+                  />
+                  {rateCardName ? (
+                    <div className="rc-file-display rc-file-rate">
+                      <span className="rc-file-name" title={rateCardName}>
+                        {rateCardName}
+                      </span>
+                      <button className="rc-file-remove" onClick={onRemoveRateCard}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="rc-upload-box" onClick={() => rateCardInputRef.current?.click()}>
+                      <Upload size={14} />
+                      <span>Click here to upload</span>
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="rc-upload-box" onClick={() => rateCardInputRef.current?.click()}>
-                  <Upload size={14} />
-                  <span>Click here to upload</span>
-                </div>
+                /* Google Drive mode */
+                <>
+                  {rateCardName ? (
+                    <div className="rc-file-display rc-file-rate rc-file-drive">
+                      <CloudDownload size={14} style={{ color: '#4285f4' }} />
+                      <span className="rc-file-name" title={rateCardName}>
+                        {rateCardName}
+                      </span>
+                      <button className="rc-file-remove" onClick={onRemoveRateCard}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="rc-drive-search">
+                      <div className="rc-drive-input-row">
+                        <input
+                          type="text"
+                          placeholder="Search merchant name in Drive..."
+                          value={driveSearchQuery}
+                          onChange={(e) => setDriveSearchQuery(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleDriveSearch()}
+                        />
+                        <button
+                          className="rc-drive-search-btn"
+                          onClick={handleDriveSearch}
+                          disabled={driveSearching || !driveSearchQuery.trim()}
+                        >
+                          {driveSearching ? <Loader size={14} className="ap-spin" /> : <Search size={14} />}
+                        </button>
+                      </div>
+
+                      {driveResults && (
+                        <div className="rc-drive-results">
+                          {driveResults.files.length === 0 ? (
+                            <div className="rc-drive-empty">{driveResults.message}</div>
+                          ) : (
+                            driveResults.files.map((f) => (
+                              <div
+                                key={f.id}
+                                className="rc-drive-file"
+                                onClick={() => handleDriveSelect(f)}
+                              >
+                                <div className="rc-drive-file-name">{f.name}</div>
+                                <div className="rc-drive-file-meta">{f.size} &middot; {new Date(f.modified).toLocaleDateString()}</div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

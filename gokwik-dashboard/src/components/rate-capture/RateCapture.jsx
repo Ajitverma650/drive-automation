@@ -95,6 +95,7 @@ export default function RateCapture({ onBack }) {
   const rateCardInputRef = useRef(null)
   const [rateCardFile, setRateCardFile] = useState(null)
   const [rateCardName, setRateCardName] = useState('')
+  const [driveFileId, setDriveFileId] = useState(null) // Google Drive file ID
 
   // Inline editing state
   const [editingCommId, setEditingCommId] = useState(null)
@@ -102,6 +103,18 @@ export default function RateCapture({ onBack }) {
 
   const checkAutoTrigger = (agFile, rcFile) => {
     if (agFile && rcFile && !autoRunTriggered) {
+      setShowAutomation(true)
+      setAutoRunTriggered(true)
+    }
+  }
+
+  // Handle Drive file selection
+  const handleDriveSelect = (driveFile) => {
+    setDriveFileId(driveFile.id)
+    setRateCardName(driveFile.name)
+    setRateCardFile(null) // clear local file — using Drive instead
+    // Auto-trigger if agreement is also uploaded
+    if (agreement.merchantAgreementFile && !autoRunTriggered) {
       setShowAutomation(true)
       setAutoRunTriggered(true)
     }
@@ -451,6 +464,7 @@ export default function RateCapture({ onBack }) {
           merchantName={dummyMerchants.find((m) => m.id === activeMerchant)?.name || ''}
           agreementFile={agreement.merchantAgreementFile}
           rateCardFile={rateCardFile}
+          driveFileId={driveFileId}
           autoRun={autoRunTriggered}
         />
       )}
@@ -472,6 +486,7 @@ export default function RateCapture({ onBack }) {
         onEditAgreement={handleEditAgreement}
         getAgreementStatus={getAgreementStatus}
         isFieldDisabled={isFieldDisabled}
+        onDriveSelect={handleDriveSelect}
       />
 
       {/* ─── Checkout Section (appears after agreement saved) ─── */}

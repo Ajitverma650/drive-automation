@@ -26,6 +26,7 @@ export default function AutomationPanel({
   merchantName,
   agreementFile,
   rateCardFile,
+  driveFileId,
   autoRun = false,
 }) {
   const [running, setRunning] = useState(false)
@@ -64,12 +65,21 @@ export default function AutomationPanel({
 
   // ─── Full Auto ────────────────────────────────
   const runFullAuto = useCallback(async () => {
-    if (!agreementFile || !rateCardFile) {
-      setError('Please upload both Agreement PDF and Rate Card PDF.')
+    const useDrive = !!driveFileId && !rateCardFile
+    if (!agreementFile) {
+      setError('Please upload Agreement PDF.')
       return
     }
-    if (!(agreementFile instanceof File) || !(rateCardFile instanceof File)) {
-      setError('Files are not valid. Please re-upload.')
+    if (!rateCardFile && !driveFileId) {
+      setError('Please upload Rate Card PDF or select from Google Drive.')
+      return
+    }
+    if (!(agreementFile instanceof File)) {
+      setError('Agreement PDF is not valid. Please re-upload.')
+      return
+    }
+    if (!useDrive && !(rateCardFile instanceof File)) {
+      setError('Rate Card PDF is not valid. Please re-upload.')
       return
     }
     if (runningRef.current) return
@@ -93,10 +103,15 @@ export default function AutomationPanel({
       addStep({ text: `Uploading ${agreementFile.name}`, status: 'running', icon: 'upload' })
       await sleep(300)
       updateLastStep({ status: 'done' })
-      addStep({ text: `Uploading ${rateCardFile.name}`, status: 'running', icon: 'upload' })
+
+      if (useDrive) {
+        addStep({ text: 'Fetching rate card from Google Drive...', status: 'running', icon: 'cloud' })
+      } else {
+        addStep({ text: `Uploading ${rateCardFile.name}`, status: 'running', icon: 'upload' })
+      }
       setProgress(8)
       await sleep(300)
-      updateLastStep({ status: 'done' })
+      updateLastStep({ status: 'done', text: useDrive ? 'Rate card fetched from Google Drive' : `Uploaded ${rateCardFile.name}` })
       setProgress(12)
 
       // Phase: AI Extract
@@ -107,10 +122,18 @@ export default function AutomationPanel({
 
       const formData = new FormData()
       formData.append('agreement_pdf', agreementFile)
-      formData.append('rate_pdf', rateCardFile)
       formData.append('merchant_name', merchantName || 'Unknown Merchant')
 
-      const res = await fetch(`${API_BASE}/api/auto-process`, {
+      let apiUrl
+      if (useDrive) {
+        formData.append('drive_file_id', driveFileId)
+        apiUrl = `${API_BASE}/api/drive/auto-process`
+      } else {
+        formData.append('rate_pdf', rateCardFile)
+        apiUrl = `${API_BASE}/api/auto-process`
+      }
+
+      const res = await fetch(apiUrl, {
         method: 'POST',
         body: formData,
       })
@@ -263,17 +286,19 @@ export default function AutomationPanel({
 
     setRunning(false)
     runningRef.current = false
-  }, [agreementFile, rateCardFile, merchantName, onPhase1Complete, onPhase2Complete, onFullAutoComplete])
+  }, [agreementFile, rateCardFile, driveFileId, merchantName, onPhase1Complete, onPhase2Complete, onFullAutoComplete])
 
-  // Auto-trigger
+  // Auto-trigger (works with both local file and Drive file)
   useEffect(() => {
-    if (autoRun && agreementFile && rateCardFile && !runningRef.current && !autoRunTriggered.current) {
-      if (!(agreementFile instanceof File) || !(rateCardFile instanceof File)) return
+    const hasRateCard = rateCardFile || driveFileId
+    if (autoRun && agreementFile && hasRateCard && !runningRef.current && !autoRunTriggered.current) {
+      if (!(agreementFile instanceof File)) return
+      if (rateCardFile && !(rateCardFile instanceof File)) return
       autoRunTriggered.current = true
       const timer = setTimeout(() => runFullAuto(), 500)
       return () => clearTimeout(timer)
     }
-  }, [autoRun, agreementFile, rateCardFile, runFullAuto])
+  }, [autoRun, agreementFile, rateCardFile, driveFileId, runFullAuto])
 
   const getStepIcon = (step) => {
     const s = step.status
@@ -309,7 +334,7 @@ export default function AutomationPanel({
             <p className="ap-subtitle">
               {running ? statusText : result
                 ? (result.all_match ? 'All rates verified successfully' : 'Completed with discrepancies')
-                : 'Upload both PDFs to start'}
+                : 'Upload Agreement PDF + Rate Card (upload or Google Drive)'}
             </p>
           </div>
         </div>
@@ -361,16 +386,16 @@ export default function AutomationPanel({
           <FileCheck size={13} />
           <span>{agreementFile ? (agreementFile.name || 'Agreement') : 'Agreement PDF'}</span>
         </div>
-        <div className={`ap-file-pill ${rateCardFile ? 'ready' : 'missing'}`}>
+        <div className={`ap-file-pill ${(rateCardFile || driveFileId) ? 'ready' : 'missing'}`}>
           <FileText size={13} />
-          <span>{rateCardFile ? rateCardFile.name : 'Rate Card PDF'}</span>
+          <span>{rateCardFile ? rateCardFile.name : driveFileId ? 'Drive: Rate Card' : 'Rate Card PDF'}</span>
         </div>
       </div>
 
       {/* Action Buttons */}
       {!running && !result && (
         <div className="ap-actions">
-          <button className="ap-run-btn full-auto" onClick={runFullAuto} disabled={running || !agreementFile || !rateCardFile}>
+          <button className="ap-run-btn full-auto" onClick={runFullAuto} disabled={running || !agreementFile || (!rateCardFile && !driveFileId)}>
             <Zap size={15} />
             Run Full Automation
           </button>

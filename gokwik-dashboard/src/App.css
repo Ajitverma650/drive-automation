@@ -1661,6 +1661,125 @@ tbody tr:hover {
   border-color: #00b894;
   background: rgba(0, 184, 148, 0.05);
 }
+.rc-file-drive {
+  border-color: #4285f4;
+  background: rgba(66, 133, 244, 0.05);
+}
+
+/* ── Rate Card: Upload / Drive toggle ── */
+.rc-rate-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.rc-rate-label-row label { margin-bottom: 0; }
+.rc-rate-toggle {
+  display: flex;
+  gap: 4px;
+  background: #f1f2f6;
+  border-radius: 6px;
+  padding: 2px;
+}
+.rc-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #636e72;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.rc-toggle-btn.active {
+  background: #fff;
+  color: #2d3436;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.rc-toggle-btn:hover:not(.active) {
+  color: #2d3436;
+}
+
+/* ── Drive search ── */
+.rc-drive-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rc-drive-input-row {
+  display: flex;
+  gap: 6px;
+}
+.rc-drive-input-row input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.rc-drive-input-row input:focus {
+  outline: none;
+  border-color: #4285f4;
+}
+.rc-drive-search-btn {
+  padding: 8px 12px;
+  background: #4285f4;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+.rc-drive-search-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rc-drive-search-btn:hover:not(:disabled) {
+  background: #3367d6;
+}
+.rc-drive-results {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+.rc-drive-file {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #f1f2f6;
+  transition: background 0.15s;
+}
+.rc-drive-file:hover {
+  background: #ebf5fb;
+}
+.rc-drive-file:last-child {
+  border-bottom: none;
+}
+.rc-drive-file-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #2d3436;
+}
+.rc-drive-file-meta {
+  font-size: 11px;
+  color: #b2bec3;
+  margin-top: 2px;
+}
+.rc-drive-empty {
+  padding: 12px;
+  text-align: center;
+  color: #b2bec3;
+  font-size: 13px;
+}
+.rc-rate-card-field {
+  min-width: 0;
+}
 
 /* ========== Toast Notifications ========== */
 .rc-toast-container {
