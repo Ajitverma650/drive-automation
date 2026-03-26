@@ -460,6 +460,7 @@ export default function RateCapture({ onBack }) {
           onPhase1Complete={handlePhase1Complete}
           onPhase2Complete={handlePhase2Complete}
           onFullAutoComplete={(data) => { if (data.all_match) { /* verified */ } }}
+          onConfirm={handleConfirm}
           dashboardRates={getDashboardRates()}
           merchantName={dummyMerchants.find((m) => m.id === activeMerchant)?.name || ''}
           agreementFile={agreement.merchantAgreementFile}

@@ -1,4 +1,4 @@
-"""Google Drive service for searching and downloading rate card PDFs."""
+"""Google Drive service for searching and downloading PDFs."""
 
 import os
 import tempfile
@@ -20,7 +20,6 @@ from app.config import (
 
 logger = logging.getLogger(__name__)
 
-# Only need read-only access to Drive
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
 
@@ -34,11 +33,9 @@ def _get_drive_service():
     token_path = get_google_drive_token_path()
     creds = None
 
-    # Load saved token if exists
     if os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
 
-    # If no valid creds, run OAuth flow
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
@@ -46,7 +43,6 @@ def _get_drive_service():
             flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
             creds = flow.run_local_server(port=9090)
 
-        # Save token for next time
         with open(token_path, 'w') as token_file:
             token_file.write(creds.to_json())
         print(f"[Google Drive] Token saved to {token_path}")
@@ -55,121 +51,187 @@ def _get_drive_service():
 
 
 def is_drive_configured() -> bool:
-    """Check if Google Drive credentials exist."""
-    return get_google_drive_credentials_path() is not None
+    """Check if Google Drive credentials and token exist."""
+    creds_path = get_google_drive_credentials_path()
+    if not creds_path:
+        return False
+    token_path = get_google_drive_token_path()
+    return os.path.exists(token_path)
 
 
-def search_rate_card(merchant_name: str) -> dict:
-    """
-    Search Google Drive for a merchant's rate card PDF.
-
-    Args:
-        merchant_name: Merchant name to search for (e.g., "Urban Objects")
-
-    Returns:
-        {
-            "success": bool,
-            "files": [{"id": "...", "name": "...", "modified": "...", "size": "..."}],
-            "message": str
-        }
-    """
-    service = _get_drive_service()
-    if not service:
-        return {
-            "success": False,
-            "files": [],
-            "message": "Google Drive not configured. Place credentials.json in project root.",
-        }
-
+def _search_files(service, query: str, page_size: int = 10) -> list[dict]:
+    """Run a Drive search query and return formatted results."""
     try:
-        # Build search query
-        # Search for merchant name in file name, PDF files only
-        search_terms = merchant_name.strip()
-        query = f"name contains '{search_terms}' and mimeType='application/pdf' and trashed=false"
-
-        # If folder ID is configured, restrict search to that folder
-        folder_id = get_google_drive_folder_id()
-        if folder_id:
-            query += f" and '{folder_id}' in parents"
-
-        print(f"[Google Drive] Searching: {query}")
-
         results = service.files().list(
             q=query,
             spaces='drive',
             fields='files(id, name, modifiedTime, size, mimeType)',
             orderBy='modifiedTime desc',
-            pageSize=10,
+            pageSize=page_size,
         ).execute()
 
-        files = results.get('files', [])
-
-        if not files:
-            # Try broader search with just first word of merchant name
-            first_word = search_terms.split()[0] if search_terms.split() else search_terms
-            query = f"name contains '{first_word}' and mimeType='application/pdf' and trashed=false"
-            if folder_id:
-                query += f" and '{folder_id}' in parents"
-
-            print(f"[Google Drive] Broad search: {query}")
-            results = service.files().list(
-                q=query,
-                spaces='drive',
-                fields='files(id, name, modifiedTime, size, mimeType)',
-                orderBy='modifiedTime desc',
-                pageSize=10,
-            ).execute()
-            files = results.get('files', [])
-
-        file_list = []
-        for f in files:
+        files = []
+        for f in results.get('files', []):
             size_bytes = int(f.get('size', 0))
             size_str = f"{size_bytes / 1024:.1f} KB" if size_bytes < 1048576 else f"{size_bytes / 1048576:.1f} MB"
-            file_list.append({
+            files.append({
                 "id": f['id'],
                 "name": f['name'],
                 "modified": f.get('modifiedTime', ''),
                 "size": size_str,
             })
-
-        print(f"[Google Drive] Found {len(file_list)} files for '{merchant_name}'")
-
-        return {
-            "success": True,
-            "files": file_list,
-            "message": f"Found {len(file_list)} file(s)" if file_list else f"No PDFs found for '{merchant_name}'",
-        }
-
+        return files
     except Exception as e:
         logger.error(f"[Google Drive] Search failed: {e}")
-        return {
-            "success": False,
-            "files": [],
-            "message": f"Drive search failed: {str(e)}",
-        }
+        return []
 
 
-def download_file(file_id: str) -> Optional[str]:
+def search_rate_card(merchant_name: str) -> dict:
+    """Search Google Drive for a merchant's rate card PDF."""
+    service = _get_drive_service()
+    if not service:
+        return {"success": False, "files": [], "message": "Google Drive not configured."}
+
+    search_terms = merchant_name.strip()
+    base_filter = "mimeType='application/pdf' and trashed=false"
+
+    # Try exact name search first
+    query = f"name contains '{search_terms}' and {base_filter}"
+    print(f"[Google Drive] Searching: {query}")
+    files = _search_files(service, query)
+
+    # Fallback: first word only
+    if not files and ' ' in search_terms:
+        first_word = search_terms.split()[0]
+        query = f"name contains '{first_word}' and {base_filter}"
+        print(f"[Google Drive] Broad search: {query}")
+        files = _search_files(service, query)
+
+    return {
+        "success": True,
+        "files": files,
+        "message": f"Found {len(files)} file(s)" if files else f"No PDFs found for '{merchant_name}'",
+    }
+
+
+def search_agreement_pdf(merchant_name: str) -> dict:
     """
-    Download a file from Google Drive to a temp path.
-
-    Args:
-        file_id: Google Drive file ID
-
-    Returns:
-        Path to downloaded temp file, or None on failure.
+    Smart search for Agreement PDF using multiple patterns.
+    Agreement PDFs typically have: "Agreement", "MSA", "signed" in the name.
     """
     service = _get_drive_service()
     if not service:
-        return None
+        return {"success": False, "files": [], "message": "Google Drive not configured."}
+
+    search_terms = merchant_name.strip()
+    base_filter = "mimeType='application/pdf' and trashed=false"
+
+    # Strategy 1: merchant name + "Agreement"
+    patterns = [
+        f"name contains '{search_terms}' and name contains 'Agreement' and {base_filter}",
+        f"name contains '{search_terms}' and name contains 'MSA' and {base_filter}",
+        f"name contains '{search_terms}' and name contains 'signed' and {base_filter}",
+        f"name contains '{search_terms}' and {base_filter}",
+    ]
+
+    # Try first word if merchant name has spaces
+    if ' ' in search_terms:
+        first_word = search_terms.split()[0]
+        patterns.extend([
+            f"name contains '{first_word}' and name contains 'Agreement' and {base_filter}",
+            f"name contains '{first_word}' and name contains 'MSA' and {base_filter}",
+        ])
+
+    for query in patterns:
+        print(f"[Google Drive] Agreement search: {query}")
+        files = _search_files(service, query)
+        # Filter: prefer files with "Agreement" or "MSA" in name
+        agreement_files = [f for f in files if any(kw in f['name'].lower() for kw in ['agreement', 'msa'])]
+        if agreement_files:
+            return {"success": True, "files": agreement_files, "message": f"Found {len(agreement_files)} agreement(s)"}
+        if files:
+            return {"success": True, "files": files, "message": f"Found {len(files)} file(s)"}
+
+    return {"success": True, "files": [], "message": f"No agreement PDF found for '{merchant_name}'"}
+
+
+def search_rate_card_pdf(merchant_name: str) -> dict:
+    """
+    Smart search for Rate Card PDF using multiple patterns.
+    Rate cards typically have: "Indicative", "Terms", "Rate", "Commercial" in the name.
+    """
+    service = _get_drive_service()
+    if not service:
+        return {"success": False, "files": [], "message": "Google Drive not configured."}
+
+    search_terms = merchant_name.strip()
+    base_filter = "mimeType='application/pdf' and trashed=false"
+
+    # Strategy: search with rate card keywords
+    patterns = [
+        f"name contains '{search_terms}' and name contains 'Indicative' and {base_filter}",
+        f"name contains '{search_terms}' and name contains 'Terms' and {base_filter}",
+        f"name contains '{search_terms}' and name contains 'Rate' and {base_filter}",
+        f"name contains '{search_terms}' and name contains 'Commercial' and {base_filter}",
+    ]
+
+    if ' ' in search_terms:
+        first_word = search_terms.split()[0]
+        patterns.extend([
+            f"name contains '{first_word}' and name contains 'Indicative' and {base_filter}",
+            f"name contains '{first_word}' and name contains 'Terms' and {base_filter}",
+        ])
+
+    for query in patterns:
+        print(f"[Google Drive] Rate card search: {query}")
+        files = _search_files(service, query)
+        rate_files = [f for f in files if any(kw in f['name'].lower() for kw in ['indicative', 'terms', 'rate', 'commercial'])]
+        if rate_files:
+            return {"success": True, "files": rate_files, "message": f"Found {len(rate_files)} rate card(s)"}
+        if files:
+            return {"success": True, "files": files, "message": f"Found {len(files)} file(s)"}
+
+    # Last fallback: search for any "Indicative Terms" files (rate cards often don't have merchant name)
+    fallback_queries = [
+        f"name contains 'Indicative' and name contains 'Terms' and {base_filter}",
+        f"name contains 'Rate Card' and {base_filter}",
+        f"name contains 'Commercial' and {base_filter}",
+    ]
+    for query in fallback_queries:
+        print(f"[Google Drive] Rate card fallback search: {query}")
+        files = _search_files(service, query)
+        if files:
+            return {
+                "success": True,
+                "files": files,
+                "message": f"No exact match for '{merchant_name}'. Showing {len(files)} rate card(s) — please select the correct one.",
+                "needs_selection": True,
+            }
+
+    return {"success": True, "files": [], "message": f"No rate card PDF found for '{merchant_name}'"}
+
+
+def download_file(file_id: str) -> tuple[Optional[str], str]:
+    """
+    Download a file from Google Drive to a temp path.
+
+    Returns:
+        (temp_file_path, file_name) or (None, error_message)
+    """
+    service = _get_drive_service()
+    if not service:
+        return None, "Google Drive not configured"
 
     try:
-        # Get file metadata for the name
-        file_meta = service.files().get(fileId=file_id, fields='name, mimeType').execute()
-        file_name = file_meta.get('name', 'rate_card.pdf')
-        print(f"[Google Drive] Downloading: {file_name}")
+        file_meta = service.files().get(fileId=file_id, fields='name, mimeType, size').execute()
+        file_name = file_meta.get('name', 'file.pdf')
+        file_size = int(file_meta.get('size', 0))
+        print(f"[Google Drive] Downloading: {file_name} ({file_size} bytes)")
 
-        # Download file content
+        # Edge case: file too large (> 50MB)
+        if file_size > 50 * 1024 * 1024:
+            return None, f"File too large ({file_size / 1048576:.1f} MB). Max 50MB."
+
         request = service.files().get_media(fileId=file_id)
         buffer = io.BytesIO()
         downloader = MediaIoBaseDownload(buffer, request)
@@ -177,19 +239,21 @@ def download_file(file_id: str) -> Optional[str]:
         done = False
         while not done:
             status, done = downloader.next_chunk()
-            if status:
-                print(f"[Google Drive] Download {int(status.progress() * 100)}%")
 
-        # Save to temp file
+        # Edge case: empty file
+        content = buffer.getvalue()
+        if len(content) < 100:
+            return None, f"Downloaded file is empty or too small ({len(content)} bytes)"
+
         suffix = os.path.splitext(file_name)[1] or '.pdf'
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
-            f.write(buffer.getvalue())
+            f.write(content)
             temp_path = f.name
 
-        print(f"[Google Drive] Downloaded to: {temp_path} ({len(buffer.getvalue())} bytes)")
-        return temp_path
+        print(f"[Google Drive] Downloaded: {temp_path} ({len(content)} bytes)")
+        return temp_path, file_name
 
     except Exception as e:
-        logger.error(f"[Google Drive] Download failed: {e}")
-        print(f"[Google Drive] Download failed: {e}")
-        return None
+        error_msg = f"Download failed: {str(e)}"
+        logger.error(f"[Google Drive] {error_msg}")
+        return None, error_msg

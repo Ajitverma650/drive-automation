@@ -1657,6 +1657,102 @@ tbody tr:hover {
   background: #c0392b;
 }
 
+/* ── Full Auto Section ── */
+.ap-full-auto-section {
+  padding: 0;
+}
+.ap-full-auto-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2d3436;
+  margin-bottom: 8px;
+}
+.ap-full-auto-row {
+  display: flex;
+  gap: 8px;
+}
+.ap-merchant-input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 2px solid #dfe6e9;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: border-color 0.2s;
+}
+.ap-merchant-input:focus {
+  outline: none;
+  border-color: #6c5ce7;
+}
+.ap-full-auto-hint {
+  font-size: 11px;
+  color: #b2bec3;
+  margin: 6px 0 0 0;
+}
+.ap-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 12px;
+  color: #b2bec3;
+  font-size: 12px;
+}
+.ap-divider::before, .ap-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid #dfe6e9;
+}
+.ap-run-btn.manual {
+  background: #f8f7ff;
+  color: #6c5ce7;
+  border: 1px solid #6c5ce7;
+}
+.ap-run-btn.manual:hover:not(:disabled) {
+  background: #6c5ce7;
+  color: #fff;
+}
+.ap-run-btn.confirm-btn {
+  background: #00b894;
+}
+.ap-run-btn.confirm-btn:hover {
+  background: #00a381;
+}
+.ap-run-btn.edit-btn {
+  background: #fdcb6e;
+  color: #2d3436;
+}
+.ap-run-btn.edit-btn:hover {
+  background: #f9bf3b;
+}
+.ap-result-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.ap-selection-card {
+  background: #f8f7ff;
+  border: 1px solid #ddd5ff;
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 12px;
+}
+.ap-selection-card h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  margin: 0 0 4px;
+  color: #6c5ce7;
+}
+.ap-selection-hint {
+  font-size: 12px;
+  color: #636e72;
+  margin: 0 0 10px;
+}
+
 .rc-file-rate {
   border-color: #00b894;
   background: rgba(0, 184, 148, 0.05);

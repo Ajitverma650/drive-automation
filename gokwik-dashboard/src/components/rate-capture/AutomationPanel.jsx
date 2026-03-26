@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Play, CheckCircle, AlertCircle, Loader, FileText, XCircle,
   Zap, Brain, ScanSearch, FileCheck, Upload, ArrowRight, Download,
-  ShieldCheck, ClipboardCheck, Sparkles, Mail,
+  ShieldCheck, ClipboardCheck, Sparkles, Mail, Pencil, CloudDownload,
 } from 'lucide-react'
 
 const API_BASE = 'http://localhost:8000'
@@ -28,6 +28,7 @@ export default function AutomationPanel({
   rateCardFile,
   driveFileId,
   autoRun = false,
+  onConfirm,
 }) {
   const [running, setRunning] = useState(false)
   const [phase, setPhase] = useState(null)
@@ -41,6 +42,7 @@ export default function AutomationPanel({
   const autoRunTriggered = useRef(false)
   const runningRef = useRef(false)
   const logEndRef = useRef(null)
+  const [merchantAutoName, setMerchantAutoName] = useState(merchantName || '')
 
   const addStep = (step) => {
     setSteps((prev) => [...prev, { ...step, time: new Date().toLocaleTimeString() }])
@@ -288,6 +290,215 @@ export default function AutomationPanel({
     runningRef.current = false
   }, [agreementFile, rateCardFile, driveFileId, merchantName, onPhase1Complete, onPhase2Complete, onFullAutoComplete])
 
+  // ─── Full Merchant Auto (one-click: name → everything) ────────
+  const runMerchantAuto = useCallback(async () => {
+    const name = merchantAutoName.trim()
+    if (!name) {
+      setError('Please enter a merchant name.')
+      return
+    }
+    if (runningRef.current) return
+    runningRef.current = true
+
+    setRunning(true)
+    setPhase('full')
+    setSteps([])
+    setError(null)
+    setResult(null)
+    setRateTable(null)
+    setProgress(0)
+    setActivePhaseIdx(0)
+    setStatusText(`Searching Google Drive for "${name}"...`)
+
+    addStep({ text: `Starting full automation for "${name}"`, status: 'done', icon: 'zap' })
+    await sleep(STEP_DELAY)
+
+    try {
+      // Phase: Search & Download
+      addStep({ text: `Searching Drive for "${name}" Agreement...`, status: 'running', icon: 'cloud' })
+      setProgress(5)
+
+      const formData = new FormData()
+      formData.append('merchant_name', name)
+
+      const res = await fetch(`${API_BASE}/api/drive/full-auto`, {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `Server error ${res.status}` }))
+        throw new Error(err.detail || 'Backend error')
+      }
+
+      const data = await res.json()
+
+      if (!data.success) {
+        // Handle "needs_selection" — show candidates for user to pick
+        if (data.needs_selection && data.rate_card_candidates) {
+          updateLastStep({ status: 'done', text: `Found Agreement: ${data.agreement_found?.name || 'Agreement PDF'}` })
+          addStep({ text: `${data.rate_card_candidates.length} rate cards found — select one below`, status: 'warning', icon: 'alert' })
+          setStatusText('Select the correct rate card')
+          setRunning(false)
+          runningRef.current = false
+          // Store candidates + agreement for user selection
+          setResult({
+            ...data,
+            _needsSelection: true,
+            _agreementFileId: data.agreement_found?.id,
+            _candidates: data.rate_card_candidates,
+          })
+          return
+        }
+
+        updateLastStep({ status: 'error', text: data.error })
+        setStatusText('Search failed')
+
+        if (data.search_results) {
+          const ag = data.search_results.agreement
+          const rc = data.search_results.rate_card
+          if (ag && ag.files && ag.files.length > 0) {
+            addStep({ text: `Agreement found: ${ag.files[0].name}`, status: 'done', icon: 'file' })
+          } else {
+            addStep({ text: 'No Agreement PDF found in Drive', status: 'error', icon: 'x' })
+          }
+          if (rc && rc.files && rc.files.length > 0) {
+            addStep({ text: `Rate Card found: ${rc.files[0].name}`, status: 'done', icon: 'file' })
+          } else if (rc) {
+            addStep({ text: 'No Rate Card PDF found in Drive', status: 'error', icon: 'x' })
+          }
+        }
+
+        addStep({ text: 'Try uploading files manually or check the merchant name', status: 'warning', icon: 'alert' })
+        setRunning(false)
+        runningRef.current = false
+        return
+      }
+
+      // Show search results
+      updateLastStep({ status: 'done', text: `Found Agreement: ${data.agreement_file_name || 'Agreement PDF'}` })
+      addStep({ text: `Found Rate Card: ${data.rate_card_file_name || 'Rate Card PDF'}`, status: 'done', icon: 'file' })
+      setProgress(15)
+      await sleep(300)
+
+      addStep({ text: 'Downloaded both PDFs from Drive', status: 'done', icon: 'cloud' })
+      setProgress(25)
+      await sleep(300)
+
+      // Phase: AI Extract
+      setActivePhaseIdx(1)
+      setStatusText('AI reading PDFs (page 2 only)...')
+      addStep({ text: 'AI analyzed Agreement PDF', status: 'done', icon: 'brain' })
+      setProgress(40)
+      await sleep(300)
+
+      addStep({ text: 'AI analyzed Rate Card PDF', status: 'done', icon: 'brain' })
+      setProgress(50)
+      await sleep(200)
+
+      const ag = data.agreement
+      if (ag.date_extraction_failed) {
+        addStep({ text: 'Could not extract date from Agreement', status: 'warning', icon: 'alert' })
+      } else {
+        addStep({ text: `Start Date: ${ag.start_date}`, status: 'done', icon: 'calendar' })
+        await sleep(150)
+        addStep({ text: `End Date: ${ag.end_date}`, status: 'done', icon: 'calendar' })
+      }
+      await sleep(200)
+
+      addStep({ text: `Extracted ${data.raw_rates_count} payment modes`, status: 'done', icon: 'scan' })
+      setProgress(58)
+      await sleep(300)
+
+      // Phase: Mapping
+      setActivePhaseIdx(2)
+      setStatusText('Mapping to dashboard fields...')
+      const mapped = data.rates.mapped.length
+      const unmapped = data.rates.unmapped.length
+      addStep({
+        text: `Mapped ${mapped} modes${unmapped > 0 ? `, ${unmapped} unmapped` : ''}`,
+        status: unmapped > 0 ? 'warning' : 'done',
+        icon: 'map',
+      })
+      setProgress(65)
+      await sleep(400)
+
+      // Phase: Auto-fill
+      setActivePhaseIdx(3)
+      setStatusText('Auto-filling form...')
+      addStep({ text: `Merchant Size: ${ag.merchant_size || 'Long Tail'}`, status: 'done', icon: 'fill' })
+      await sleep(150)
+      addStep({ text: `Merchant Type: ${ag.merchant_type || 'D2C'}`, status: 'done', icon: 'fill' })
+      await sleep(150)
+
+      // Build rate table for preview
+      const tableRows = []
+      const tabs = data.tabs
+      for (const [tabName, entries] of Object.entries(tabs)) {
+        for (const e of entries) {
+          tableRows.push({ tab: tabName, method: e.method, rate: e.rate, mode: e.original_mode })
+        }
+      }
+      setRateTable(tableRows)
+      addStep({ text: `Filling ${tableRows.length} rates across ${Object.keys(tabs).length} tabs`, status: 'done', icon: 'fill' })
+      setProgress(82)
+      await sleep(400)
+
+      // Auto-fill the form
+      if (onPhase1Complete) onPhase1Complete(data)
+      addStep({ text: 'Dashboard auto-filled', status: 'done', icon: 'shield' })
+      await sleep(300)
+
+      // Phase: Verify
+      setActivePhaseIdx(4)
+      setStatusText('Verifying rates...')
+      const report = data.report
+      addStep({
+        text: `Compared ${report.total} modes: ${report.matched} matched, ${report.mismatched} mismatched`,
+        status: report.mismatched > 0 ? 'warning' : 'done',
+        icon: 'verify',
+      })
+      setProgress(95)
+      await sleep(300)
+
+      // Phase: Result
+      setActivePhaseIdx(5)
+      if (data.all_match) {
+        setStatusText('All rates verified — ready to confirm!')
+        addStep({ text: 'ALL RATES MATCH', status: 'success', icon: 'shield' })
+      } else {
+        setStatusText('Discrepancies found — review required')
+        addStep({ text: 'DISCREPANCIES FOUND', status: 'error', icon: 'alert' })
+        for (const d of report.discrepancies) {
+          addStep({
+            text: `${d.mode}: Expected ${d.expected_rate}%, Found ${d.actual_rate}%`,
+            status: 'error', icon: 'x',
+          })
+          await sleep(150)
+        }
+        if (data.email_sent?.success) {
+          addStep({ text: `Report emailed to: ${data.email_sent.sent_to.join(', ')}`, status: 'success', icon: 'mail' })
+        }
+      }
+
+      setProgress(100)
+      await sleep(200)
+      addStep({ text: 'Full automation complete', status: 'success', icon: 'sparkle' })
+      setResult(data)
+
+      if (onPhase2Complete) onPhase2Complete(data)
+      if (onFullAutoComplete) onFullAutoComplete(data)
+    } catch (err) {
+      updateLastStep({ status: 'error' })
+      addStep({ text: `Error: ${err.message}`, status: 'error', icon: 'x' })
+      setError(err.message)
+      setStatusText('Pipeline failed')
+    }
+
+    setRunning(false)
+    runningRef.current = false
+  }, [merchantAutoName, onPhase1Complete, onPhase2Complete, onFullAutoComplete])
+
   // Auto-trigger (works with both local file and Drive file)
   useEffect(() => {
     const hasRateCard = rateCardFile || driveFileId
@@ -392,13 +603,43 @@ export default function AutomationPanel({
         </div>
       </div>
 
-      {/* Action Buttons */}
+      {/* Full Auto: Merchant Name Input */}
       {!running && !result && (
-        <div className="ap-actions">
-          <button className="ap-run-btn full-auto" onClick={runFullAuto} disabled={running || !agreementFile || (!rateCardFile && !driveFileId)}>
-            <Zap size={15} />
-            Run Full Automation
-          </button>
+        <div className="ap-full-auto-section">
+          <div className="ap-full-auto-header">
+            <Zap size={14} style={{ color: '#6c5ce7' }} />
+            <span>One-Click Full Automation</span>
+          </div>
+          <div className="ap-full-auto-row">
+            <input
+              type="text"
+              className="ap-merchant-input"
+              placeholder="Enter merchant name (e.g. Urban Objects)..."
+              value={merchantAutoName}
+              onChange={(e) => setMerchantAutoName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && merchantAutoName.trim() && runMerchantAuto()}
+            />
+            <button
+              className="ap-run-btn full-auto"
+              onClick={runMerchantAuto}
+              disabled={running || !merchantAutoName.trim()}
+            >
+              <Zap size={14} />
+              Auto Run
+            </button>
+          </div>
+          <p className="ap-full-auto-hint">
+            Searches Google Drive for both PDFs, extracts, fills, and verifies automatically
+          </p>
+
+          <div className="ap-divider"><span>OR upload manually</span></div>
+
+          <div className="ap-actions">
+            <button className="ap-run-btn manual" onClick={runFullAuto} disabled={running || !agreementFile || (!rateCardFile && !driveFileId)}>
+              <Play size={14} />
+              Run with Uploaded Files
+            </button>
+          </div>
         </div>
       )}
 
@@ -460,8 +701,120 @@ export default function AutomationPanel({
         </div>
       )}
 
+      {/* Rate Card Selection (when needs_selection) */}
+      {result && result._needsSelection && (
+        <div className="ap-selection-card">
+          <h4><CloudDownload size={16} /> Select Rate Card for "{merchantAutoName}"</h4>
+          <p className="ap-selection-hint">Agreement found. Multiple rate cards detected — pick the correct one:</p>
+          <div className="rc-drive-results">
+            {result._candidates.map((f) => (
+              <div
+                key={f.id}
+                className="rc-drive-file"
+                onClick={async () => {
+                  // User picked a file — now run with agreement + selected rate card
+                  setResult(null)
+                  setRunning(true)
+                  runningRef.current = true
+                  setStatusText('Downloading selected rate card...')
+                  addStep({ text: `Selected: ${f.name}`, status: 'done', icon: 'file' })
+
+                  try {
+                    const formData = new FormData()
+                    formData.append('merchant_name', merchantAutoName)
+                    addStep({ text: 'Downloading both PDFs...', status: 'running', icon: 'cloud' })
+
+                    const res2 = await fetch(`${API_BASE}/api/drive/full-auto-select`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        merchant_name: merchantAutoName,
+                        agreement_file_id: result._agreementFileId,
+                        rate_card_file_id: f.id,
+                      }),
+                    })
+
+                    if (!res2.ok) {
+                      const err = await res2.json().catch(() => ({ detail: 'Server error' }))
+                      throw new Error(err.detail || 'Backend error')
+                    }
+
+                    const data2 = await res2.json()
+                    if (!data2.success) {
+                      addStep({ text: `Error: ${data2.error}`, status: 'error', icon: 'x' })
+                      setRunning(false)
+                      runningRef.current = false
+                      return
+                    }
+
+                    // Success — show the rest of the pipeline
+                    updateLastStep({ status: 'done', text: 'Both PDFs downloaded' })
+                    setProgress(25)
+                    await sleep(300)
+
+                    setActivePhaseIdx(1)
+                    setStatusText('AI reading PDFs...')
+                    const ag = data2.agreement
+                    addStep({ text: `Start Date: ${ag.start_date || 'Not found'}`, status: ag.date_extraction_failed ? 'warning' : 'done', icon: 'calendar' })
+                    addStep({ text: `Extracted ${data2.raw_rates_count} payment modes`, status: 'done', icon: 'scan' })
+                    setProgress(60)
+                    await sleep(300)
+
+                    setActivePhaseIdx(3)
+                    const tableRows = []
+                    for (const [tabName, entries] of Object.entries(data2.tabs)) {
+                      for (const e of entries) {
+                        tableRows.push({ tab: tabName, method: e.method, rate: e.rate, mode: e.original_mode })
+                      }
+                    }
+                    setRateTable(tableRows)
+                    addStep({ text: `Filling ${tableRows.length} rates`, status: 'done', icon: 'fill' })
+                    setProgress(82)
+
+                    if (onPhase1Complete) onPhase1Complete(data2)
+                    await sleep(300)
+
+                    setActivePhaseIdx(5)
+                    const report = data2.report
+                    if (data2.all_match) {
+                      setStatusText('All rates verified!')
+                      addStep({ text: 'ALL RATES MATCH', status: 'success', icon: 'shield' })
+                    } else {
+                      setStatusText('Discrepancies found')
+                      addStep({ text: 'DISCREPANCIES FOUND', status: 'error', icon: 'alert' })
+                      for (const d of report.discrepancies) {
+                        addStep({ text: `${d.mode}: Expected ${d.expected_rate}%, Found ${d.actual_rate}%`, status: 'error', icon: 'x' })
+                      }
+                    }
+                    setProgress(100)
+                    addStep({ text: 'Complete', status: 'success', icon: 'sparkle' })
+                    setResult(data2)
+                    if (onPhase2Complete) onPhase2Complete(data2)
+                    if (onFullAutoComplete) onFullAutoComplete(data2)
+                  } catch (err) {
+                    addStep({ text: `Error: ${err.message}`, status: 'error', icon: 'x' })
+                    setError(err.message)
+                  }
+                  setRunning(false)
+                  runningRef.current = false
+                }}
+              >
+                <div className="rc-drive-file-name">{f.name}</div>
+                <div className="rc-drive-file-meta">{f.size} &middot; {new Date(f.modified).toLocaleDateString()}</div>
+              </div>
+            ))}
+          </div>
+          <button className="ap-restart-btn" style={{ marginTop: 12 }} onClick={() => {
+            setResult(null); setSteps([]); setProgress(0); setActivePhaseIdx(-1)
+            setRateTable(null); setStatusText(''); setError(null)
+          }}>
+            <Play size={14} /> Start Over
+          </button>
+        </div>
+      )}
+
       {/* Final Result Card */}
-      {result && result.report && (
+      {result && result.report && !result._needsSelection && (
         <div className={`ap-result-card ${result.all_match ? 'match' : 'mismatch'}`}>
           <div className="ap-result-icon">
             {result.all_match
@@ -505,18 +858,43 @@ export default function AutomationPanel({
         </div>
       )}
 
-      {/* Restart */}
+      {/* Result Action Buttons */}
       {result && !running && (
-        <button
-          className="ap-restart-btn"
-          onClick={() => {
-            setResult(null); setSteps([]); setProgress(0); setActivePhaseIdx(-1)
-            setRateTable(null); setStatusText(''); setError(null)
-            autoRunTriggered.current = false
-          }}
-        >
-          <Play size={14} /> Run Again
-        </button>
+        <div className="ap-result-actions">
+          {result.all_match ? (
+            <button
+              className="ap-run-btn confirm-btn"
+              onClick={() => {
+                if (onConfirm) onConfirm()
+                addStep({ text: 'Confirmed and saved!', status: 'success', icon: 'shield' })
+              }}
+            >
+              <ShieldCheck size={14} /> Confirm & Save
+            </button>
+          ) : (
+            <>
+              <button
+                className="ap-run-btn edit-btn"
+                onClick={() => {
+                  setResult(null); setSteps([]); setProgress(0); setActivePhaseIdx(-1)
+                  setRateTable(null); setStatusText(''); setError(null)
+                }}
+              >
+                <Pencil size={14} /> Edit Manually
+              </button>
+            </>
+          )}
+          <button
+            className="ap-restart-btn"
+            onClick={() => {
+              setResult(null); setSteps([]); setProgress(0); setActivePhaseIdx(-1)
+              setRateTable(null); setStatusText(''); setError(null)
+              autoRunTriggered.current = false
+            }}
+          >
+            <Play size={14} /> Run Again
+          </button>
+        </div>
       )}
     </div>
   )
