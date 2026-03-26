@@ -49,3 +49,10 @@ npm-debug.log*
 
 # ── Screenshots ───────────────────────────────────
 screenshot/
+screenshots/
+*.png
+
+# ── Playwright / GoKwik browser ──────────────────
+gokwik_browser_profile/
+gokwik_session.json
+gokwik_cdp.txt

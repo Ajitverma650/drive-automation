@@ -1,6 +1,8 @@
 """
-One-time GoKwik dashboard login script.
-Opens Chrome → you login manually → saves session for future automation.
+GoKwik Dashboard — Save Login Session.
+
+Uses a dedicated Playwright browser profile that persists login.
+First run: login manually. After that: stays logged in permanently.
 
 Usage:
     python -m automation.auth_gokwik
@@ -8,51 +10,59 @@ Usage:
 
 import asyncio
 import os
-import sys
 
 from playwright.async_api import async_playwright
 
 GOKWIK_URL = "https://sandbox-mdashboard.dev.gokwik.in"
-SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "gokwik_session.json")
+BROWSER_PROFILE = os.path.join(os.path.dirname(__file__), "..", "gokwik_browser_profile")
 
 
 async def main():
     print("=" * 55)
-    print("  GoKwik Dashboard - Save Login Session")
+    print("  GoKwik Dashboard — Login & Save")
     print("=" * 55)
-    print(f"  URL: {GOKWIK_URL}")
-    print(f"  Session file: {os.path.abspath(SESSION_FILE)}")
+    print(f"  Profile: {os.path.abspath(BROWSER_PROFILE)}")
     print("=" * 55)
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(viewport={"width": 1400, "height": 900})
-        page = await context.new_page()
+        # Use persistent context — this saves ALL browser data
+        # (cookies, localStorage, sessionStorage, IndexedDB)
+        # between runs. Like a real browser profile.
+        context = await p.chromium.launch_persistent_context(
+            user_data_dir=BROWSER_PROFILE,
+            headless=False,
+            viewport={"width": 1400, "height": 900},
+            args=["--disable-blink-features=AutomationControlled"],
+        )
 
-        print("\n[Auth] Opening GoKwik dashboard...")
+        page = context.pages[0] if context.pages else await context.new_page()
         await page.goto(GOKWIK_URL)
+        await page.wait_for_timeout(3000)
 
-        print("\n" + "-" * 55)
-        print("  LOGIN MANUALLY in the browser window.")
-        print("  Navigate to the Rate Capture page.")
-        print("  Then come back here and press ENTER.")
-        print("-" * 55)
-        input("\n  Press ENTER after you've logged in and see Rate Capture page...")
+        url = page.url
+        print(f"\n[Auth] Current URL: {url}")
 
-        # Verify we're on the right page
-        current_url = page.url
-        print(f"\n[Auth] Current URL: {current_url}")
+        if "login" not in url.lower():
+            print("[Auth] Already logged in from previous session!")
+            print("[Auth] Navigating to Rate Capture...")
+            await page.goto(f"{GOKWIK_URL}/general/rateCapture")
+            await page.wait_for_timeout(2000)
+        else:
+            print("\n" + "-" * 55)
+            print("  Login to GoKwik in the browser window.")
+            print("  Navigate to Rate Capture page.")
+            print("  Then press ENTER here.")
+            print("-" * 55)
+            input("\n  Press ENTER when done...")
 
-        # Save session (cookies + localStorage)
-        await context.storage_state(path=SESSION_FILE)
-        print(f"[Auth] Session saved to: {os.path.abspath(SESSION_FILE)}")
+        print(f"\n[Auth] Final URL: {page.url}")
+        await context.close()
 
-        print("\n" + "=" * 55)
-        print("  Session saved! Future runs will skip login.")
-        print("  Run: python -m automation.test_gokwik")
-        print("=" * 55)
-
-        await browser.close()
+    print("\n" + "=" * 55)
+    print("  Login saved in browser profile!")
+    print("  Next runs will be auto-logged-in.")
+    print("  Test: python -m automation.test_gokwik")
+    print("=" * 55)
 
 
 if __name__ == "__main__":

@@ -11,10 +11,10 @@ const STEP_DELAY = 350
 // Phase pipeline config
 const PHASES = [
   { key: 'upload', label: 'Upload', icon: Upload },
-  { key: 'extract', label: 'AI Extracting', icon: Brain },
+  { key: 'extract', label: 'AI Extract', icon: Brain },
   { key: 'mapping', label: 'Mapping', icon: ArrowRight },
-  { key: 'filling', label: 'Auto-Fill', icon: Download },
-  { key: 'verify', label: 'Verifying', icon: ScanSearch },
+  { key: 'filling', label: 'Fill GoKwik', icon: Download },
+  { key: 'verify', label: 'Verify', icon: ScanSearch },
   { key: 'result', label: 'Result', icon: ShieldCheck },
 ]
 
@@ -445,32 +445,107 @@ export default function AutomationPanel({
       setProgress(82)
       await sleep(400)
 
-      // Auto-fill the form
+      // Auto-fill LOCAL dashboard
       if (onPhase1Complete) onPhase1Complete(data)
-      addStep({ text: 'Dashboard auto-filled', status: 'done', icon: 'shield' })
+      addStep({ text: 'Local dashboard auto-filled', status: 'done', icon: 'fill' })
+      await sleep(300)
+
+      // Phase: Fill GoKwik (Playwright)
+      setActivePhaseIdx(3)
+      setStatusText('Filling real GoKwik dashboard...')
+      addStep({ text: 'Connecting to GoKwik dashboard...', status: 'running', icon: 'cloud' })
+      setProgress(85)
+
+      let gokwikFilled = false
+      try {
+        const fillForm = new FormData()
+        fillForm.append('tabs_json', JSON.stringify(data.tabs))
+        fillForm.append('agreement_json', JSON.stringify(data.agreement))
+        fillForm.append('merchant_name', name)
+
+        const fillRes = await fetch(`${API_BASE}/api/playwright/fill`, {
+          method: 'POST', body: fillForm,
+        })
+        const fillData = await fillRes.json()
+
+        if (fillData.success) {
+          gokwikFilled = true
+          updateLastStep({ status: 'done', text: `Filled ${fillData.filled} rates on GoKwik` })
+          if (fillData.failed > 0) {
+            addStep({ text: `${fillData.failed} entries failed to fill`, status: 'warning', icon: 'alert' })
+          }
+        } else {
+          updateLastStep({ status: 'warning', text: `GoKwik fill: ${fillData.message}` })
+          addStep({ text: 'Skipping GoKwik — using local verification', status: 'warning', icon: 'alert' })
+        }
+      } catch (err) {
+        updateLastStep({ status: 'warning', text: 'GoKwik not available — using local verification' })
+      }
+
       await sleep(300)
 
       // Phase: Verify
       setActivePhaseIdx(4)
-      setStatusText('Verifying rates...')
-      const report = data.report
-      addStep({
-        text: `Compared ${report.total} modes: ${report.matched} matched, ${report.mismatched} mismatched`,
-        status: report.mismatched > 0 ? 'warning' : 'done',
-        icon: 'verify',
-      })
+      let report
+
+      if (gokwikFilled) {
+        // REAL Phase 2: Read back from GoKwik
+        setStatusText('Reading back from GoKwik screen...')
+        addStep({ text: 'Reading rates from GoKwik screen...', status: 'running', icon: 'verify' })
+
+        try {
+          const verifyForm = new FormData()
+          verifyForm.append('expected_json', JSON.stringify(data.rates.mapped))
+          verifyForm.append('merchant_name', name)
+
+          const verifyRes = await fetch(`${API_BASE}/api/playwright/verify`, {
+            method: 'POST', body: verifyForm,
+          })
+          const verifyData = await verifyRes.json()
+
+          if (verifyData.success) {
+            report = verifyData.report
+            updateLastStep({
+              status: 'done',
+              text: `Read ${verifyData.total_read} rates from GoKwik screen`,
+            })
+            addStep({
+              text: `REAL verification: ${report.matched} matched, ${report.mismatched} mismatched`,
+              status: report.mismatched > 0 ? 'warning' : 'done',
+              icon: 'verify',
+            })
+          } else {
+            updateLastStep({ status: 'warning', text: `GoKwik verify failed: ${verifyData.message}` })
+            report = data.report // fallback to local
+          }
+        } catch (err) {
+          updateLastStep({ status: 'warning', text: 'GoKwik verify failed — using local result' })
+          report = data.report
+        }
+      } else {
+        // Fallback: local verification
+        setStatusText('Verifying locally...')
+        report = data.report
+        addStep({
+          text: `Local verification: ${report.matched} matched, ${report.mismatched} mismatched`,
+          status: report.mismatched > 0 ? 'warning' : 'done',
+          icon: 'verify',
+        })
+      }
+
       setProgress(95)
       await sleep(300)
 
       // Phase: Result
       setActivePhaseIdx(5)
-      if (data.all_match) {
-        setStatusText('All rates verified — ready to confirm!')
+      const allMatch = !report.has_discrepancies
+      if (allMatch) {
+        setStatusText('All rates verified!')
         addStep({ text: 'ALL RATES MATCH', status: 'success', icon: 'shield' })
       } else {
-        setStatusText('Discrepancies found — review required')
+        setStatusText('Discrepancies found')
         addStep({ text: 'DISCREPANCIES FOUND', status: 'error', icon: 'alert' })
-        for (const d of report.discrepancies) {
+        for (const d of (report.discrepancies || [])) {
           addStep({
             text: `${d.mode}: Expected ${d.expected_rate}%, Found ${d.actual_rate}%`,
             status: 'error', icon: 'x',
@@ -484,8 +559,11 @@ export default function AutomationPanel({
 
       setProgress(100)
       await sleep(200)
-      addStep({ text: 'Full automation complete', status: 'success', icon: 'sparkle' })
-      setResult(data)
+      addStep({
+        text: gokwikFilled ? 'GoKwik automation complete' : 'Local automation complete',
+        status: 'success', icon: 'sparkle',
+      })
+      setResult({ ...data, report, all_match: allMatch, gokwik_filled: gokwikFilled })
 
       if (onPhase2Complete) onPhase2Complete(data)
       if (onFullAutoComplete) onFullAutoComplete(data)
@@ -918,9 +996,26 @@ export default function AutomationPanel({
           {result.all_match ? (
             <button
               className="ap-run-btn confirm-btn"
-              onClick={() => {
+              onClick={async () => {
+                // Confirm locally
                 if (onConfirm) onConfirm()
-                addStep({ text: 'Confirmed and saved!', status: 'success', icon: 'shield' })
+                addStep({ text: 'Confirmed locally', status: 'done', icon: 'shield' })
+
+                // Also confirm on GoKwik if it was filled there
+                if (result.gokwik_filled) {
+                  addStep({ text: 'Confirming on GoKwik...', status: 'running', icon: 'cloud' })
+                  try {
+                    const res = await fetch(`${API_BASE}/api/playwright/confirm`, { method: 'POST' })
+                    const data = await res.json()
+                    if (data.success) {
+                      updateLastStep({ status: 'success', text: 'Confirmed on GoKwik!' })
+                    } else {
+                      updateLastStep({ status: 'warning', text: `GoKwik confirm: ${data.message}` })
+                    }
+                  } catch (e) {
+                    updateLastStep({ status: 'warning', text: 'Could not confirm on GoKwik' })
+                  }
+                }
               }}
             >
               <ShieldCheck size={14} /> Confirm & Save

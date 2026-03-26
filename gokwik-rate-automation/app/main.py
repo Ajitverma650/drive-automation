@@ -7,7 +7,7 @@ Creates the FastAPI app, configures CORS, and includes all route modules.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import phase1, phase2, auto_process, email, drive
+from app.routes import phase1, phase2, auto_process, email, drive, playwright
 
 app = FastAPI(title="GoKwik Rate Capture Automation API")
 
@@ -26,3 +26,4 @@ app.include_router(phase2.router)
 app.include_router(auto_process.router)
 app.include_router(email.router)
 app.include_router(drive.router)
+app.include_router(playwright.router)
