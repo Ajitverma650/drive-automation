@@ -1,0 +1,19 @@
+# Secrets
+.env
+credentials.json
+token.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Generated test PDFs
+sample_agreement.pdf
+sample_rate_card.pdf
+
+# IDE
+.vscode/
+.idea/

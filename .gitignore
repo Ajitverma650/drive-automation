@@ -1,0 +1,51 @@
+# ── Secrets (NEVER push these) ────────────────────
+.env
+credentials.json
+token.json
+*.pem
+*.key
+
+# ── Python ────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# ── Node ──────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+
+# ── Generated PDFs ────────────────────────────────
+*.pdf
+
+# ── OS files ──────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.local
+
+# ── Claude Code ───────────────────────────────────
+.claude/
+
+# ── Logs ──────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ── Screenshots ───────────────────────────────────
+screenshot/
