@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Play, CheckCircle, AlertCircle, Loader, FileText, XCircle,
   Zap, Brain, ScanSearch, FileCheck, Upload, ArrowRight, Download,
-  ShieldCheck, ClipboardCheck, Sparkles, Mail, Pencil, CloudDownload,
+  ShieldCheck, ClipboardCheck, Sparkles, Mail, Pencil, CloudDownload, Search,
 } from 'lucide-react'
 
 const API_BASE = 'http://localhost:8000'
@@ -43,6 +43,7 @@ export default function AutomationPanel({
   const runningRef = useRef(false)
   const logEndRef = useRef(null)
   const [merchantAutoName, setMerchantAutoName] = useState(merchantName || '')
+  const [autoMode, setAutoMode] = useState('drive') // 'drive' or 'upload'
 
   const addStep = (step) => {
     setSteps((prev) => [...prev, { ...step, time: new Date().toLocaleTimeString() }])
@@ -591,55 +592,108 @@ export default function AutomationPanel({
         </div>
       )}
 
-      {/* File Status Pills */}
-      <div className="ap-file-status">
-        <div className={`ap-file-pill ${agreementFile ? 'ready' : 'missing'}`}>
-          <FileCheck size={13} />
-          <span>{agreementFile ? (agreementFile.name || 'Agreement') : 'Agreement PDF'}</span>
-        </div>
-        <div className={`ap-file-pill ${(rateCardFile || driveFileId) ? 'ready' : 'missing'}`}>
-          <FileText size={13} />
-          <span>{rateCardFile ? rateCardFile.name : driveFileId ? 'Drive: Rate Card' : 'Rate Card PDF'}</span>
-        </div>
-      </div>
-
-      {/* Full Auto: Merchant Name Input */}
+      {/* Mode Selector + Action */}
       {!running && !result && (
-        <div className="ap-full-auto-section">
-          <div className="ap-full-auto-header">
-            <Zap size={14} style={{ color: '#6c5ce7' }} />
-            <span>One-Click Full Automation</span>
-          </div>
-          <div className="ap-full-auto-row">
-            <input
-              type="text"
-              className="ap-merchant-input"
-              placeholder="Enter merchant name (e.g. Urban Objects)..."
-              value={merchantAutoName}
-              onChange={(e) => setMerchantAutoName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && merchantAutoName.trim() && runMerchantAuto()}
-            />
+        <div className="ap-mode-section">
+          {/* Mode Tabs */}
+          <div className="ap-mode-tabs">
             <button
-              className="ap-run-btn full-auto"
-              onClick={runMerchantAuto}
-              disabled={running || !merchantAutoName.trim()}
+              className={`ap-mode-tab ${autoMode === 'drive' ? 'active' : ''}`}
+              onClick={() => setAutoMode('drive')}
             >
-              <Zap size={14} />
-              Auto Run
+              <CloudDownload size={15} />
+              <div className="ap-mode-tab-text">
+                <span className="ap-mode-tab-title">Google Drive Auto</span>
+                <span className="ap-mode-tab-desc">Just type merchant name</span>
+              </div>
+            </button>
+            <button
+              className={`ap-mode-tab ${autoMode === 'upload' ? 'active' : ''}`}
+              onClick={() => setAutoMode('upload')}
+            >
+              <Upload size={15} />
+              <div className="ap-mode-tab-text">
+                <span className="ap-mode-tab-title">Manual Upload</span>
+                <span className="ap-mode-tab-desc">Upload both PDFs</span>
+              </div>
             </button>
           </div>
-          <p className="ap-full-auto-hint">
-            Searches Google Drive for both PDFs, extracts, fills, and verifies automatically
-          </p>
 
-          <div className="ap-divider"><span>OR upload manually</span></div>
+          {/* Drive Auto Mode */}
+          {autoMode === 'drive' && (
+            <div className="ap-mode-content">
+              <div className="ap-full-auto-row">
+                <div className="ap-input-wrap">
+                  <Search size={16} className="ap-input-icon" />
+                  <input
+                    type="text"
+                    className="ap-merchant-input"
+                    placeholder="Enter merchant name (e.g. Jaipur Masala)..."
+                    value={merchantAutoName}
+                    onChange={(e) => setMerchantAutoName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && merchantAutoName.trim() && runMerchantAuto()}
+                  />
+                </div>
+                <button
+                  className="ap-run-btn full-auto"
+                  onClick={runMerchantAuto}
+                  disabled={running || !merchantAutoName.trim()}
+                >
+                  <Zap size={14} />
+                  Auto Run
+                </button>
+              </div>
+              <div className="ap-mode-info">
+                <div className="ap-mode-info-item">
+                  <span className="ap-mode-info-dot green" />
+                  Searches Google Drive for Agreement + Rate Card
+                </div>
+                <div className="ap-mode-info-item">
+                  <span className="ap-mode-info-dot green" />
+                  AI extracts, auto-fills, and verifies in one click
+                </div>
+              </div>
+            </div>
+          )}
 
-          <div className="ap-actions">
-            <button className="ap-run-btn manual" onClick={runFullAuto} disabled={running || !agreementFile || (!rateCardFile && !driveFileId)}>
-              <Play size={14} />
-              Run with Uploaded Files
-            </button>
-          </div>
+          {/* Manual Upload Mode */}
+          {autoMode === 'upload' && (
+            <div className="ap-mode-content">
+              <div className="ap-file-status">
+                <div className={`ap-file-pill ${agreementFile ? 'ready' : 'missing'}`}>
+                  {agreementFile ? <FileCheck size={13} /> : <AlertCircle size={13} />}
+                  <span>{agreementFile ? (agreementFile.name || 'Agreement PDF') : 'Upload Agreement PDF above'}</span>
+                </div>
+                <div className={`ap-file-pill ${(rateCardFile || driveFileId) ? 'ready' : 'missing'}`}>
+                  {(rateCardFile || driveFileId) ? <FileCheck size={13} /> : <AlertCircle size={13} />}
+                  <span>
+                    {rateCardFile ? rateCardFile.name
+                      : driveFileId ? 'Rate Card (from Drive)'
+                      : 'Upload Rate Card or select from Drive'}
+                  </span>
+                </div>
+              </div>
+              <button
+                className="ap-run-btn full-auto"
+                onClick={runFullAuto}
+                disabled={running || !agreementFile || (!rateCardFile && !driveFileId)}
+                style={{ width: '100%', marginTop: 12 }}
+              >
+                <Play size={14} />
+                {(!agreementFile || (!rateCardFile && !driveFileId))
+                  ? 'Upload both PDFs to start'
+                  : 'Run Automation'}
+              </button>
+              {(!agreementFile || (!rateCardFile && !driveFileId)) && (
+                <div className="ap-mode-info" style={{ marginTop: 8 }}>
+                  <div className="ap-mode-info-item">
+                    <span className="ap-mode-info-dot orange" />
+                    Upload files in the Agreement Details section above
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

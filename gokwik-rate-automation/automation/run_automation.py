@@ -52,7 +52,8 @@ def call_extraction_api(agreement_pdf: str, rate_pdf: str, merchant_name: str) -
     return result
 
 
-async def run_pipeline(merchant_name: str, headless: bool = False, extraction_data: dict = None):
+async def run_pipeline(merchant_name: str, headless: bool = False, extraction_data: dict = None,
+                       args_agreement: str = None, args_rate_card: str = None):
     """
     Main pipeline:
     1. Open dashboard
@@ -83,12 +84,12 @@ async def run_pipeline(merchant_name: str, headless: bool = False, extraction_da
             rc = RateCapturePage(page)
             await rc.wait_ready()
 
-            # ─── Step 2: Trigger automation via frontend UI ───
+            # ─── Step 2: Trigger automation ───
             print("\n" + "=" * 50)
             print("  PHASE 1: Auto-Fill via Frontend")
             print("=" * 50)
 
-            # Click "Run Automation" button to open the panel
+            # Open automation panel
             try:
                 await page.click("text=Run Automation")
                 await page.wait_for_timeout(500)
@@ -96,14 +97,39 @@ async def run_pipeline(merchant_name: str, headless: bool = False, extraction_da
             except Exception:
                 print("[Playwright] Automation panel may already be open")
 
-            # Type merchant name and click "Auto Run"
-            merchant_input = page.locator(".ap-merchant-input").first
-            await merchant_input.fill(merchant_name)
-            await page.wait_for_timeout(300)
+            if extraction_data:
+                # LOCAL PDF MODE: Data already extracted, inject directly
+                # Upload files via the frontend file inputs to trigger auto-fill
+                print(f"[Playwright] Local PDF mode: uploading files via frontend...")
 
-            auto_run_btn = page.locator("button:has-text('Auto Run')").first
-            await auto_run_btn.click()
-            print(f"[Playwright] Triggered Auto Run for '{merchant_name}'")
+                # Upload agreement PDF
+                if args_agreement:
+                    ag_input = await page.query_selector('input[type="file"]')
+                    if ag_input:
+                        await ag_input.set_input_files(os.path.abspath(args_agreement))
+                        await page.wait_for_timeout(500)
+                        print(f"[Playwright] Uploaded agreement: {args_agreement}")
+
+                # Upload rate card PDF
+                if args_rate_card:
+                    file_inputs = await page.query_selector_all('input[type="file"]')
+                    if len(file_inputs) >= 2:
+                        await file_inputs[1].set_input_files(os.path.abspath(args_rate_card))
+                        await page.wait_for_timeout(500)
+                        print(f"[Playwright] Uploaded rate card: {args_rate_card}")
+
+                # The frontend auto-triggers when both files are uploaded
+                print("[Playwright] Both files uploaded, waiting for auto-trigger...")
+
+            else:
+                # DRIVE MODE: Type merchant name and click Auto Run
+                merchant_input = page.locator(".ap-merchant-input").first
+                await merchant_input.fill(merchant_name)
+                await page.wait_for_timeout(300)
+
+                auto_run_btn = page.locator("button:has-text('Auto Run')").first
+                await auto_run_btn.click()
+                print(f"[Playwright] Triggered Auto Run for '{merchant_name}'")
 
             # ─── Step 3: Wait for automation to complete ──
             print("[Playwright] Waiting for automation to complete...")
@@ -325,6 +351,8 @@ def main():
         merchant_name=args.merchant,
         headless=args.headless,
         extraction_data=extraction_data,
+        args_agreement=args.agreement,
+        args_rate_card=args.rate_card,
     ))
 
 
