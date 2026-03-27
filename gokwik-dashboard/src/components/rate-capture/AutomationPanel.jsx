@@ -450,7 +450,7 @@ export default function AutomationPanel({
       addStep({ text: 'Local dashboard auto-filled', status: 'done', icon: 'fill' })
       await sleep(300)
 
-      // Phase: Fill GoKwik (Playwright)
+      // Phase: Fill GoKwik (Playwright via gokwik_filler)
       setActivePhaseIdx(3)
       setStatusText('Filling real GoKwik dashboard...')
       addStep({ text: 'Connecting to GoKwik dashboard...', status: 'running', icon: 'cloud' })
@@ -462,8 +462,9 @@ export default function AutomationPanel({
         fillForm.append('tabs_json', JSON.stringify(data.tabs))
         fillForm.append('agreement_json', JSON.stringify(data.agreement))
         fillForm.append('merchant_name', name)
+        fillForm.append('is_new', 'true')
 
-        const fillRes = await fetch(`${API_BASE}/api/playwright/fill`, {
+        const fillRes = await fetch(`${API_BASE}/api/gokwik/fill`, {
           method: 'POST', body: fillForm,
         })
         const fillData = await fillRes.json()
@@ -471,11 +472,20 @@ export default function AutomationPanel({
         if (fillData.success) {
           gokwikFilled = true
           updateLastStep({ status: 'done', text: `Filled ${fillData.filled} rates on GoKwik` })
+          // Show individual steps from Playwright
+          for (const s of (fillData.steps || [])) {
+            if (s.status === 'done') {
+              addStep({ text: s.text, status: 'done', icon: 'fill' })
+            } else if (s.status === 'failed') {
+              addStep({ text: s.text, status: 'error', icon: 'x' })
+            }
+            await sleep(100)
+          }
           if (fillData.failed > 0) {
             addStep({ text: `${fillData.failed} entries failed to fill`, status: 'warning', icon: 'alert' })
           }
         } else {
-          updateLastStep({ status: 'warning', text: `GoKwik fill: ${fillData.message}` })
+          updateLastStep({ status: 'warning', text: `GoKwik: ${fillData.message}` })
           addStep({ text: 'Skipping GoKwik — using local verification', status: 'warning', icon: 'alert' })
         }
       } catch (err) {
