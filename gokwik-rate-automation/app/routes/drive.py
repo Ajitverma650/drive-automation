@@ -295,6 +295,7 @@ async def drive_full_auto(
         result["source"] = "google_drive_full_auto"
         result["agreement_file_name"] = agreement_file["name"]
         result["rate_card_file_name"] = rate_file["name"]
+        result["rate_card_path"] = rate_path  # Keep for GoKwik fill step
         result["search_results"] = {
             "agreement": agreement_result,
             "rate_card": rate_result,
@@ -308,7 +309,8 @@ async def drive_full_auto(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        _cleanup(agreement_path, rate_path)
+        # Only cleanup agreement; rate card is kept for GoKwik Playwright upload
+        _cleanup(agreement_path)
 
 
 @router.post("/full-auto-select")

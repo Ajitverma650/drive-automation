@@ -450,7 +450,7 @@ export default function AutomationPanel({
       addStep({ text: 'Local dashboard auto-filled', status: 'done', icon: 'fill' })
       await sleep(300)
 
-      // Phase: Fill GoKwik (Playwright via gokwik_filler)
+      // Phase: Fill GoKwik (reuse already-extracted data)
       setActivePhaseIdx(3)
       setStatusText('Filling real GoKwik dashboard...')
       addStep({ text: 'Connecting to GoKwik dashboard...', status: 'running', icon: 'cloud' })
@@ -459,9 +459,10 @@ export default function AutomationPanel({
       let gokwikFilled = false
       try {
         const fillForm = new FormData()
-        fillForm.append('tabs_json', JSON.stringify(data.tabs))
-        fillForm.append('agreement_json', JSON.stringify(data.agreement))
         fillForm.append('merchant_name', name)
+        fillForm.append('agreement_json', JSON.stringify(data.agreement))
+        fillForm.append('tabs_json', JSON.stringify(data.tabs))
+        fillForm.append('rate_card_path', data.rate_card_path || '')
         fillForm.append('is_new', 'true')
 
         const fillRes = await fetch(`${API_BASE}/api/gokwik/fill`, {

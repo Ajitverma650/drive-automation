@@ -55,7 +55,24 @@ async def _connect() -> tuple:
         await p.stop()
         raise ConnectionError("No browser context. Restart browser_server.")
 
-    page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
+    # Use existing page or create new one
+    pages = contexts[0].pages
+    if pages:
+        page = pages[0]
+    else:
+        page = await contexts[0].new_page()
+
+    # Test if page is alive
+    try:
+        await page.evaluate("() => document.title")
+    except Exception:
+        # Page is dead, create a new one
+        try:
+            page = await contexts[0].new_page()
+        except Exception as e2:
+            await p.stop()
+            raise ConnectionError(f"Browser page not available. Restart browser_server.\nError: {e2}")
+
     return p, browser, page
 
 
@@ -90,8 +107,14 @@ async def fill_gokwik(
         await page.goto(RATE_CAPTURE_URL, timeout=30000)
         await page.wait_for_timeout(3000)
 
+        # If redirected to login, retry once (session may just need a refresh)
         if "login" in page.url.lower():
-            return _fail("Not logged in. Login in browser_server window.", steps)
+            logger.info("[GoKwik Filler] Login page detected, retrying navigation...")
+            await page.goto(RATE_CAPTURE_URL, timeout=30000)
+            await page.wait_for_timeout(5000)
+
+            if "login" in page.url.lower():
+                return _fail("Not logged in. Login in browser_server window.", steps)
 
         # Wait for merchant list
         try:
@@ -121,13 +144,18 @@ async def fill_gokwik(
             return _fail("Agreement form did not open.", steps)
 
         # ─── Step 2: Upload rate card PDF ──────────────
+        print(f"[GoKwik Filler] Current URL before upload: {page.url}")
         if rate_card_path and os.path.exists(rate_card_path):
+            print(f"[GoKwik Filler] Uploading: {rate_card_path} (exists={os.path.exists(rate_card_path)}, size={os.path.getsize(rate_card_path)})")
             uploaded = await _upload_pdf(page, rate_card_path)
             if uploaded:
                 steps.append({"step": "upload", "status": "done",
                               "text": f"Uploaded: {os.path.basename(rate_card_path)}"})
             else:
-                steps.append({"step": "upload", "status": "warning", "text": "PDF upload failed"})
+                # Take screenshot to debug
+                await page.screenshot(path=_ss("upload_failed"), full_page=True)
+                steps.append({"step": "upload", "status": "warning",
+                              "text": f"PDF upload failed. Check screenshot. Path: {rate_card_path})"})
 
         # ─── Step 3: Fill agreement fields ─────────────
         filled_fields = await _fill_agreement_fields(page, agreement)
@@ -140,11 +168,20 @@ async def fill_gokwik(
 
         # Check for errors
         error_toast = await page.query_selector("text=Not Allowed")
+        if not error_toast:
+            error_toast = await page.query_selector(".ant-message-error")
         if error_toast:
             error_text = await error_toast.inner_text()
+            await page.screenshot(path=_ss("save_error"), full_page=True)
             return _fail(f"Save failed: {error_text}", steps)
 
-        steps.append({"step": "save_agreement", "status": "done", "text": "Agreement saved"})
+        # Check for success toast
+        success_toast = await page.query_selector("text=saved successfully")
+        if success_toast:
+            steps.append({"step": "save_agreement", "status": "done", "text": "Agreement saved"})
+        else:
+            await page.screenshot(path=_ss("save_unknown"), full_page=True)
+            steps.append({"step": "save_agreement", "status": "warning", "text": "Save clicked, checking checkout..."})
 
         # ─── Step 5: Expand Checkout ───────────────────
         try:
@@ -229,10 +266,13 @@ async def fill_gokwik(
         return _fail(str(e), steps)
     except Exception as e:
         logger.error(f"[GoKwik Filler] Error: {e}")
+        import traceback
+        traceback.print_exc()
         return _fail(f"Error: {str(e)}", steps)
     finally:
-        if p:
-            await p.stop()
+        # Don't call p.stop() — it kills the CDP connection for future calls
+        # Just let the playwright instance go out of scope
+        pass
 
 
 # ─── Helper Functions ──────────────────────────────────
@@ -288,22 +328,39 @@ async def _find_and_click_merchant(page: Page, merchant_name: str) -> bool:
 async def _upload_pdf(page: Page, file_path: str) -> bool:
     """Upload a PDF file to the Merchant agreement field."""
     try:
-        # Check if there's already a file uploaded (has close-circle button)
-        existing = await page.query_selector('[aria-label="close-circle"]')
-        if existing:
-            return True  # File already uploaded, skip
+        print(f"[GoKwik Filler] _upload_pdf called with: {file_path}")
+        print(f"[GoKwik Filler] File exists: {os.path.exists(file_path)}, size: {os.path.getsize(file_path) if os.path.exists(file_path) else 'N/A'}")
 
-        # Click upload button and handle file chooser
-        upload_btn = page.get_by_role("button", name="Click here to upload")
-        if await upload_btn.is_visible(timeout=2000):
-            async with page.expect_file_chooser() as fc_info:
-                await upload_btn.click()
-            file_chooser = await fc_info.value
-            await file_chooser.set_files(file_path)
-            await page.wait_for_timeout(1000)
+        # Check if there's already a file uploaded
+        existing = await page.query_selector('.ant-upload-list-item')
+        if existing:
+            print("[GoKwik Filler] File already uploaded, skipping")
             return True
+
+        # Find the hidden file input
+        file_input = await page.query_selector('input[type="file"]')
+        if not file_input:
+            print("[GoKwik Filler] No file input found on page!")
+            return False
+
+        print("[GoKwik Filler] Found file input, setting files...")
+        await file_input.set_input_files(file_path)
+        await page.wait_for_timeout(2000)
+
+        # Verify upload appeared
+        uploaded = await page.query_selector('.ant-upload-list-item')
+        if uploaded:
+            text = await uploaded.inner_text()
+            print(f"[GoKwik Filler] Upload success: {text}")
+            return True
+        else:
+            print("[GoKwik Filler] set_input_files ran but no upload item appeared")
+            return False
+
     except Exception as e:
-        logger.error(f"[GoKwik Filler] Upload failed: {e}")
+        print(f"[GoKwik Filler] Upload exception: {e}")
+        import traceback
+        traceback.print_exc()
     return False
 
 

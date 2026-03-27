@@ -54,5 +54,6 @@ screenshots/
 
 # ── Playwright / GoKwik browser ──────────────────
 gokwik_browser_profile/
+browser_data/
 gokwik_session.json
 gokwik_cdp.txt
