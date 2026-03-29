@@ -4,54 +4,61 @@ Long-running Playwright browser server.
 Keeps ONE Chrome browser open with GoKwik session.
 The FastAPI backend connects to this browser for fill/verify/confirm.
 
-Uses a persistent user-data directory so login cookies survive restarts.
-After the first login, subsequent starts will auto-login.
+Logs in automatically with email + password + OTP (no persistent profiles needed).
 
 Usage:
     python -m automation.browser_server
+    python -m automation.browser_server --user 2   # Use sandbox user 2
 
 Flow:
-    1. Opens Chrome (visible) with persistent profile
-    2. First time: login to GoKwik with Google, press Enter
-    3. Next times: auto-logged-in from saved cookies
-    4. FastAPI backend uses this browser via CDP
-    5. Ctrl+C to stop
+    1. Opens Chrome (visible)
+    2. Logs in automatically with email + password + OTP
+    3. FastAPI backend uses this browser via CDP
+    4. Ctrl+C to stop
 """
 
+import argparse
 import asyncio
 import os
-import signal
-import sys
 
 from playwright.async_api import async_playwright
 
-GOKWIK_URL = "https://sandbox-mdashboard.dev.gokwik.in"
+from automation.config import GOKWIK_URL, GOKWIK_EMAIL, GOKWIK_PASSWORD, GOKWIK_OTP
+from automation.login import login_to_gokwik
+
 CDP_PORT = 9222  # Chrome DevTools Protocol port
 
-# Persistent profile directory — cookies/sessions survive restarts
-USER_DATA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "browser_data",
-)
+SANDBOX_USERS = {
+    1: {
+        "email": os.getenv("SANDBOX_USER_1_EMAIL", "sandboxuser1@gokwik.co"),
+        "password": os.getenv("SANDBOX_USER_1_PASSWORD", "Wb7y,=e.9NX9"),
+        "otp": os.getenv("SANDBOX_USER_1_OTP", "123456"),
+    },
+    2: {
+        "email": os.getenv("SANDBOX_USER_2_EMAIL", "sandboxuser2@gokwik.co"),
+        "password": os.getenv("SANDBOX_USER_2_PASSWORD", "Wb7y,=e.9NX2"),
+        "otp": os.getenv("SANDBOX_USER_2_OTP", "123456"),
+    },
+    3: {
+        "email": os.getenv("SANDBOX_USER_3_EMAIL", "sandboxuser3@gokwik.co"),
+        "password": os.getenv("SANDBOX_USER_3_PASSWORD", "Wb7y,=e.9NX3"),
+        "otp": os.getenv("SANDBOX_USER_3_OTP", "123456"),
+    },
+}
 
 
-async def main():
+async def main(email: str, password: str, otp: str):
     print("=" * 55)
     print("  GoKwik Browser Server")
     print("=" * 55)
     print(f"  GoKwik URL:  {GOKWIK_URL}")
     print(f"  CDP Port:    {CDP_PORT}")
-    print(f"  Profile Dir: {USER_DATA_DIR}")
+    print(f"  Login:       {email}")
     print("=" * 55)
 
-    os.makedirs(USER_DATA_DIR, exist_ok=True)
-
     async with async_playwright() as p:
-        # Launch with persistent context — cookies are saved to disk
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=USER_DATA_DIR,
+        browser = await p.chromium.launch(
             headless=False,
-            viewport={"width": 1400, "height": 900},
             args=[
                 f"--remote-debugging-port={CDP_PORT}",
                 "--disable-blink-features=AutomationControlled",
@@ -59,30 +66,20 @@ async def main():
                 "--no-default-browser-check",
             ],
         )
+        context = await browser.new_context(viewport={"width": 1400, "height": 900})
+        page = await context.new_page()
 
-        # Use existing page or create one
-        page = context.pages[0] if context.pages else await context.new_page()
+        # Login with email + password + OTP
+        success = await login_to_gokwik(page, email=email, password=password, otp=otp)
 
-        # Navigate to GoKwik
-        await page.goto(GOKWIK_URL)
-        await page.wait_for_timeout(3000)
-
-        # Check if already logged in (not redirected to login page)
-        if "login" in page.url.lower():
-            print("\n" + "-" * 55)
-            print("  Not logged in yet (first time or session expired)")
-            print("  1. Login to GoKwik with Google in the browser")
-            print("  2. Navigate to Rate Capture page")
-            print("  3. Press ENTER here when ready")
-            print("-" * 55)
-            input("\n  Press ENTER after login...")
+        if not success:
+            print("\n[Server] Login FAILED. Check credentials.")
+            print("[Server] Keeping browser open for manual inspection...")
+            print("[Server] Press Ctrl+C to stop.\n")
         else:
-            print("\n  Auto-logged in from saved session!")
+            print(f"\n[Server] Logged in! URL: {page.url}")
 
-        print(f"\n[Server] Logged in! URL: {page.url}")
         print(f"[Server] CDP running on port {CDP_PORT}")
-        print(f"[Server] Browser will stay open.")
-        print(f"[Server] Cookies saved to: {USER_DATA_DIR}")
         print(f"[Server] Press Ctrl+C to stop.\n")
 
         # Save CDP endpoint for the backend to use
@@ -102,9 +99,26 @@ async def main():
                 os.remove(cdp_file)
             except Exception:
                 pass
-            await context.close()
-            print("[Server] Browser closed. Session saved.")
+            await browser.close()
+            print("[Server] Browser closed.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="GoKwik Browser Server")
+    parser.add_argument("--user", type=int, choices=[1, 2, 3], help="Sandbox user number")
+    parser.add_argument("--email", help="Override email")
+    parser.add_argument("--password", help="Override password")
+    parser.add_argument("--otp", help="Override OTP")
+    args = parser.parse_args()
+
+    if args.user:
+        user = SANDBOX_USERS[args.user]
+        email = args.email or user["email"]
+        password = args.password or user["password"]
+        otp = args.otp or user["otp"]
+    else:
+        email = args.email or GOKWIK_EMAIL
+        password = args.password or GOKWIK_PASSWORD
+        otp = args.otp or GOKWIK_OTP
+
+    asyncio.run(main(email, password, otp))

@@ -64,6 +64,7 @@ async def playwright_fill(
 async def playwright_verify(
     expected_json: str = Form(...),
     merchant_name: str = Form("Unknown"),
+    rate_card_name: str = Form(""),
 ):
     """
     Read back rates from real GoKwik and compare against expected (PDF).
@@ -79,8 +80,21 @@ async def playwright_verify(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Read back from GoKwik
-    read_result = await verify_gokwik_dashboard(merchant_name)
+    # Read back from GoKwik — pass merchant_name as target_merchant for switching
+    # Build expected tabs from mapped rates
+    expected_tabs = {}
+    for entry in expected_mapped:
+        tab = entry.get("tab", "")
+        if tab not in expected_tabs:
+            expected_tabs[tab] = []
+        expected_tabs[tab].append({"method": entry.get("method", "Default"), "rate": entry.get("rate", 0)})
+
+    read_result = await verify_gokwik_dashboard(
+        merchant_name=merchant_name,
+        expected_tabs=expected_tabs,
+        target_merchant=merchant_name,
+        rate_card_name=rate_card_name,
+    )
 
     if not read_result["success"]:
         return {

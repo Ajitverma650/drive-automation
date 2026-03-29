@@ -245,13 +245,18 @@ def download_file(file_id: str) -> tuple[Optional[str], str]:
         if len(content) < 100:
             return None, f"Downloaded file is empty or too small ({len(content)} bytes)"
 
-        suffix = os.path.splitext(file_name)[1] or '.pdf'
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as f:
-            f.write(content)
-            temp_path = f.name
+        # Save to persistent downloads folder (not temp — temp files get deleted)
+        downloads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "downloads")
+        os.makedirs(downloads_dir, exist_ok=True)
 
-        print(f"[Google Drive] Downloaded: {temp_path} ({len(content)} bytes)")
-        return temp_path, file_name
+        # Clean filename for saving
+        safe_name = file_name.replace(" ", "_").replace("/", "_")
+        save_path = os.path.join(downloads_dir, safe_name)
+        with open(save_path, 'wb') as f:
+            f.write(content)
+
+        print(f"[Google Drive] Downloaded: {save_path} ({len(content)} bytes)")
+        return save_path, file_name
 
     except Exception as e:
         error_msg = f"Download failed: {str(e)}"

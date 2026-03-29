@@ -291,11 +291,32 @@ async def drive_full_auto(
             merchant, steps
         )
 
+        # Copy rate card PDF to persistent location for GoKwik upload
+        import shutil
+        persistent_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "screenshots")
+        os.makedirs(persistent_dir, exist_ok=True)
+        persistent_rate_card = os.path.join(persistent_dir, f"_drive_{rate_file['name']}")
+        try:
+            shutil.copy2(rate_path, persistent_rate_card)
+            print(f"[Drive] Rate card saved to: {persistent_rate_card}")
+        except Exception as e:
+            print(f"[Drive] Failed to copy rate card: {e}")
+            persistent_rate_card = rate_path  # fallback to temp path
+
+        # Also copy agreement PDF for upload
+        persistent_agreement = os.path.join(persistent_dir, f"_drive_{agreement_file['name']}")
+        try:
+            shutil.copy2(agreement_path, persistent_agreement)
+            print(f"[Drive] Agreement saved to: {persistent_agreement}")
+        except Exception as e:
+            persistent_agreement = ""
+
         # Add metadata
         result["source"] = "google_drive_full_auto"
         result["agreement_file_name"] = agreement_file["name"]
         result["rate_card_file_name"] = rate_file["name"]
-        result["rate_card_path"] = rate_path  # Keep for GoKwik fill step
+        result["rate_card_path"] = persistent_rate_card
+        result["agreement_pdf_path"] = persistent_agreement
         result["search_results"] = {
             "agreement": agreement_result,
             "rate_card": rate_result,

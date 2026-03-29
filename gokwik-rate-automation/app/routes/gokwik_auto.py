@@ -1,19 +1,16 @@
 """
 GoKwik Auto-Fill API — the main endpoint that ties everything together.
 
-POST /api/gokwik/fill-from-drive
-  Input: { merchant_name: "Jaipur Masala" }
-  Does:
-    1. Search Google Drive for agreement + rate card PDFs
-    2. Download both to temp files
-    3. Extract dates from agreement PDF (page 2)
-    4. Extract rates from rate card PDF (page 2)
-    5. Fill real GoKwik dashboard via Playwright
-    6. Return result with steps and screenshot
-
 POST /api/gokwik/fill
-  Input: { merchant_name, agreement, tabs, rate_card_path, is_new }
-  Does: Just the Playwright fill step (data already extracted)
+  Input: { merchant_name, agreement_json, tabs_json, rate_card_path, is_new }
+  Does: Login to GoKwik → Navigate to Rate Capture → Fill form with extracted data
+
+POST /api/gokwik/fill-from-drive
+  Input: { merchant_name }
+  Does: Search Drive → Download → Extract → Fill GoKwik
+
+Both endpoints launch a fresh headless browser, login automatically, and fill.
+No separate browser_server needed.
 """
 
 import os
@@ -40,23 +37,30 @@ async def gokwik_fill(
     agreement_json: str = Form(...),
     tabs_json: str = Form(...),
     rate_card_path: str = Form(""),
+    agreement_pdf_path: str = Form(""),
     is_new: bool = Form(True),
 ):
-    """Fill rates on real GoKwik dashboard. Data already extracted."""
-    from automation.gokwik_filler import fill_gokwik
+    """
+    Fill rates on real GoKwik dashboard.
+    Data already extracted — just needs to be filled.
 
+    Launches a visible browser, logs into GoKwik, navigates to Rate Capture,
+    and fills the form automatically.
+    """
     try:
         agreement = json.loads(agreement_json)
         tabs = json.loads(tabs_json)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    result = await fill_gokwik(
+    from app.services.playwright_driver import fill_gokwik_dashboard
+
+    result = await fill_gokwik_dashboard(
+        tabs=tabs,
+        agreement=agreement,
         merchant_name=merchant_name,
         rate_card_path=rate_card_path,
-        agreement=agreement,
-        tabs=tabs,
-        is_new=is_new,
+        agreement_pdf_path=agreement_pdf_path,
     )
     return result
 
@@ -70,7 +74,7 @@ async def gokwik_fill_from_drive(
     Full automation: Search Drive → Download → Extract → Fill GoKwik.
     One input: merchant name. Everything else is automatic.
     """
-    from automation.gokwik_filler import fill_gokwik
+    from app.services.playwright_driver import fill_gokwik_dashboard
 
     merchant = merchant_name.strip()
     if not merchant:
@@ -84,7 +88,6 @@ async def gokwik_fill_from_drive(
         # ─── Step 1: Search Google Drive ──────────────
         steps.append({"phase": "search", "text": f"Searching Drive for '{merchant}'..."})
 
-        # Find agreement PDF
         ag_result = search_agreement_pdf(merchant)
         if not ag_result["files"]:
             return JSONResponse(content={
@@ -96,7 +99,6 @@ async def gokwik_fill_from_drive(
         ag_file = ag_result["files"][0]
         steps.append({"phase": "search", "text": f"Agreement: {ag_file['name']}"})
 
-        # Find rate card PDF
         rc_result = search_rate_card_pdf(merchant)
         if not rc_result["files"]:
             return JSONResponse(content={
@@ -133,9 +135,8 @@ async def gokwik_fill_from_drive(
         steps.append({"phase": "download", "text": "Both PDFs downloaded"})
 
         # ─── Step 3: Extract data ─────────────────────
-        steps.append({"phase": "extract", "text": "AI extracting from PDFs (page 2)..."})
+        steps.append({"phase": "extract", "text": "AI extracting from PDFs..."})
 
-        # Extract from agreement
         start_date = extract_start_date(agreement_path)
         agreement_info = None
         try:
@@ -158,7 +159,6 @@ async def gokwik_fill_from_drive(
 
         steps.append({"phase": "extract", "text": f"Agreement: {start_date} to {end_date}"})
 
-        # Extract rates
         raw_rates = extract_rates(rate_card_path)
         if not raw_rates:
             return JSONResponse(content={
@@ -177,15 +177,12 @@ async def gokwik_fill_from_drive(
         # ─── Step 4: Fill GoKwik Dashboard ────────────
         steps.append({"phase": "fill", "text": "Filling real GoKwik dashboard..."})
 
-        fill_result = await fill_gokwik(
-            merchant_name=merchant,
-            rate_card_path=rate_card_path,
-            agreement=agreement,
+        fill_result = await fill_gokwik_dashboard(
             tabs=tabs,
-            is_new=is_new,
+            agreement=agreement,
+            merchant_name=merchant,
         )
 
-        # Merge steps
         steps.extend(fill_result.get("steps", []))
 
         return {
@@ -207,11 +204,9 @@ async def gokwik_fill_from_drive(
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
-        # Cleanup temp files
         for path in [agreement_path]:
             if path and os.path.exists(path):
                 try:
                     os.unlink(path)
                 except OSError:
                     pass
-        # Don't delete rate_card_path — it was used by Playwright

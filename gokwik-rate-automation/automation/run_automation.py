@@ -1,23 +1,33 @@
 """
-Playwright-based Rate Capture Automation with REAL Phase 2 verification.
+GoKwik Rate Capture Automation — End-to-End Pipeline.
+
+Logs into real GoKwik dashboard, extracts data from PDFs, and fills
+the Rate Capture form automatically.
 
 Flow:
-  1. Opens dashboard in Chrome
-  2. Clicks "Run Automation" --> types merchant name --> clicks "Auto Run"
-  3. Frontend calls backend API --> extracts --> auto-fills form
-  4. Playwright READS BACK all values from the filled form (REAL Phase 2)
-  5. Compares PDF rates vs screen values
-  6. Reports match/mismatch
+  1. Launch Chrome, login to real GoKwik (email + password + OTP)
+  2. Navigate to Rate Capture via sidebar menu
+  3. Select existing merchant OR create new agreement
+  4. Extract rates from PDFs (via backend API or local files)
+  5. Auto-fill agreement details + rates across all payment tabs
+  6. Save as Draft for checker to confirm
 
 Usage:
-  # Full auto via Google Drive:
-  python -m automation.run_automation --merchant "Jaipur"
+  # Full auto via Google Drive (backend must be running):
+  python -m automation.run_automation --merchant "Jaipur Masala"
 
-  # With local files (uploads via frontend):
-  python -m automation.run_automation --merchant "Sandbox" --agreement sample_agreement.pdf --rate-card sample_rate_card.pdf
+  # With local PDF files:
+  python -m automation.run_automation --merchant "Sandbox" \\
+      --agreement sample_agreement.pdf --rate-card sample_rate_card.pdf
 
-  # Headless:
+  # Edit existing merchant (don't create new):
+  python -m automation.run_automation --merchant "Jaipur Masala" --edit
+
+  # Headless mode:
   python -m automation.run_automation --merchant "Jaipur" --headless
+
+  # Specific sandbox user:
+  python -m automation.run_automation --merchant "Jaipur" --user 2
 """
 
 import argparse
@@ -31,8 +41,27 @@ from playwright.async_api import async_playwright
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from automation.config import DASHBOARD_URL, API_BASE, PAGE_TIMEOUT
-from automation.rate_capture_page import RateCapturePage
+from automation.config import DASHBOARD_URL, API_BASE, PAGE_TIMEOUT, GOKWIK_URL, GOKWIK_EMAIL, GOKWIK_PASSWORD, GOKWIK_OTP
+from automation.login import login_to_gokwik, navigate_to_rate_capture
+from automation.gokwik_filler import fill_gokwik
+
+SANDBOX_USERS = {
+    1: {
+        "email": os.getenv("SANDBOX_USER_1_EMAIL", "sandboxuser1@gokwik.co"),
+        "password": os.getenv("SANDBOX_USER_1_PASSWORD", "Wb7y,=e.9NX9"),
+        "otp": os.getenv("SANDBOX_USER_1_OTP", "123456"),
+    },
+    2: {
+        "email": os.getenv("SANDBOX_USER_2_EMAIL", "sandboxuser2@gokwik.co"),
+        "password": os.getenv("SANDBOX_USER_2_PASSWORD", "Wb7y,=e.9NX2"),
+        "otp": os.getenv("SANDBOX_USER_2_OTP", "123456"),
+    },
+    3: {
+        "email": os.getenv("SANDBOX_USER_3_EMAIL", "sandboxuser3@gokwik.co"),
+        "password": os.getenv("SANDBOX_USER_3_PASSWORD", "Wb7y,=e.9NX3"),
+        "otp": os.getenv("SANDBOX_USER_3_OTP", "123456"),
+    },
+}
 
 
 def call_extraction_api(agreement_pdf: str, rate_pdf: str, merchant_name: str) -> dict:
@@ -43,316 +72,227 @@ def call_extraction_api(agreement_pdf: str, rate_pdf: str, merchant_name: str) -
         'rate_pdf': (os.path.basename(rate_pdf), open(rate_pdf, 'rb')),
     }
     resp = requests.post(f"{API_BASE}/api/auto-process",
-                         files=files, data={'merchant_name': merchant_name}, timeout=60)
+                         files=files, data={'merchant_name': merchant_name}, timeout=120)
     resp.raise_for_status()
     result = resp.json()
     if not result.get("success"):
         raise Exception(f"Extraction failed: {result.get('error')}")
-    print(f"[API] Extracted {result['raw_rates_count']} rates")
+    print(f"[API] Extracted {result['raw_rates_count']} rates across {len(result.get('tabs', {}))} tabs")
     return result
 
 
-async def run_pipeline(merchant_name: str, headless: bool = False, extraction_data: dict = None,
-                       args_agreement: str = None, args_rate_card: str = None):
+def call_drive_api(merchant_name: str) -> dict:
+    """Call backend to search Drive, download, and extract PDFs for a merchant."""
+    print(f"[API] Fetching from Google Drive for '{merchant_name}'...")
+    resp = requests.post(f"{API_BASE}/api/gokwik/fill-from-drive",
+                         data={'merchant_name': merchant_name, 'is_new': 'true'}, timeout=120)
+    resp.raise_for_status()
+    result = resp.json()
+    if not result.get("success"):
+        raise Exception(f"Drive fetch failed: {result.get('message')}")
+    return result
+
+
+async def run_pipeline(
+    merchant_name: str,
+    headless: bool = False,
+    extraction_data: dict = None,
+    email: str = None,
+    password: str = None,
+    otp: str = None,
+    is_new: bool = True,
+):
     """
-    Main pipeline:
-    1. Open dashboard
-    2. Use the frontend's automation panel (type merchant name --> Auto Run)
-    3. Wait for auto-fill to complete
-    4. Read back values from screen (REAL Phase 2)
-    5. Compare and report
+    Main automation pipeline:
+    1. Login to GoKwik (email + password + OTP)
+    2. Navigate to Rate Capture via sidebar
+    3. Fill rates from extracted data
+    4. Save and report
     """
     async with async_playwright() as p:
         print(f"\n[Playwright] Launching Chrome {'(headless)' if headless else '(visible)'}...")
-        browser = await p.chromium.launch(headless=headless, slow_mo=50)
+        browser = await p.chromium.launch(
+            headless=headless,
+            slow_mo=50,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         context = await browser.new_context(viewport={"width": 1400, "height": 900})
         page = await context.new_page()
 
         try:
-            # ─── Step 1: Navigate to Rate Capture ─────
-            print(f"[Playwright] Opening {DASHBOARD_URL}")
-            await page.goto(DASHBOARD_URL, timeout=PAGE_TIMEOUT)
-            await page.wait_for_timeout(1500)
-
-            # Click Rate Capture in sidebar
-            try:
-                await page.click("text=Rate Capture")
-                await page.wait_for_timeout(1000)
-            except Exception:
-                pass
-
-            rc = RateCapturePage(page)
-            await rc.wait_ready()
-
-            # ─── Step 2: Trigger automation ───
-            print("\n" + "=" * 50)
-            print("  PHASE 1: Auto-Fill via Frontend")
-            print("=" * 50)
-
-            # Open automation panel
-            try:
-                await page.click("text=Run Automation")
-                await page.wait_for_timeout(500)
-                print("[Playwright] Automation panel opened")
-            except Exception:
-                print("[Playwright] Automation panel may already be open")
-
-            if extraction_data:
-                # LOCAL PDF MODE: Data already extracted, inject directly
-                # Upload files via the frontend file inputs to trigger auto-fill
-                print(f"[Playwright] Local PDF mode: uploading files via frontend...")
-
-                # Upload agreement PDF
-                if args_agreement:
-                    ag_input = await page.query_selector('input[type="file"]')
-                    if ag_input:
-                        await ag_input.set_input_files(os.path.abspath(args_agreement))
-                        await page.wait_for_timeout(500)
-                        print(f"[Playwright] Uploaded agreement: {args_agreement}")
-
-                # Upload rate card PDF
-                if args_rate_card:
-                    file_inputs = await page.query_selector_all('input[type="file"]')
-                    if len(file_inputs) >= 2:
-                        await file_inputs[1].set_input_files(os.path.abspath(args_rate_card))
-                        await page.wait_for_timeout(500)
-                        print(f"[Playwright] Uploaded rate card: {args_rate_card}")
-
-                # The frontend auto-triggers when both files are uploaded
-                print("[Playwright] Both files uploaded, waiting for auto-trigger...")
-
-            else:
-                # DRIVE MODE: Type merchant name and click Auto Run
-                merchant_input = page.locator(".ap-merchant-input").first
-                await merchant_input.fill(merchant_name)
-                await page.wait_for_timeout(300)
-
-                auto_run_btn = page.locator("button:has-text('Auto Run')").first
-                await auto_run_btn.click()
-                print(f"[Playwright] Triggered Auto Run for '{merchant_name}'")
-
-            # ─── Step 3: Wait for automation to complete ──
-            print("[Playwright] Waiting for automation to complete...")
-
-            # Wait for "complete" or "error" or "select" to appear in the log
-            # Poll for result: check for success/error indicators
-            max_wait = 120  # 120 seconds max
-            poll_interval = 2  # check every 2 seconds
-            elapsed = 0
-            completed = False
-            needs_selection = False
-
-            while elapsed < max_wait:
-                await page.wait_for_timeout(poll_interval * 1000)
-                elapsed += poll_interval
-
-                # Check if result card appeared (success)
-                result_card = await page.query_selector(".ap-result-card")
-                if result_card:
-                    completed = True
-                    print(f"[Playwright] Automation completed in ~{elapsed}s")
-                    break
-
-                # Check if selection needed
-                selection_card = await page.query_selector(".ap-selection-card")
-                if selection_card:
-                    needs_selection = True
-                    print(f"[Playwright] Rate card selection needed")
-                    break
-
-                # Check for error
-                error_el = await page.query_selector(".ap-error")
-                if error_el:
-                    error_text = await error_el.inner_text()
-                    print(f"[Playwright] Error: {error_text}")
-                    break
-
-                # Progress indicator
-                progress_el = await page.query_selector(".ap-progress-pct")
-                if progress_el:
-                    pct = await progress_el.inner_text()
-                    print(f"[Playwright] Progress: {pct}", end="\r")
-
-            # Handle rate card selection
-            if needs_selection:
-                print("[Playwright] Multiple rate cards found. Selecting first one...")
-                # Click first file in the selection list
-                first_file = page.locator(".rc-drive-file").first
-                await first_file.click()
-                print("[Playwright] Selected first rate card")
-
-                # Wait for completion after selection
-                elapsed = 0
-                while elapsed < max_wait:
-                    await page.wait_for_timeout(poll_interval * 1000)
-                    elapsed += poll_interval
-                    result_card = await page.query_selector(".ap-result-card")
-                    if result_card:
-                        completed = True
-                        print(f"[Playwright] Completed after selection in ~{elapsed}s")
-                        break
-
-            if not completed:
-                print("[Playwright] Automation did not complete. Taking screenshot...")
-                await rc.take_screenshot("automation_timeout")
-                await browser.close()
+            # ─── Step 1: Login ────────────────────────────
+            print(f"[Playwright] Logging into GoKwik as {email}...")
+            success = await login_to_gokwik(page, email=email, password=password, otp=otp)
+            if not success:
+                print("[Playwright] Login failed! Aborting.")
+                await page.screenshot(path="login_failed.png", full_page=True)
                 return
 
-            # Take screenshot of filled form
-            await rc.take_screenshot("phase1_filled")
+            print("[Playwright] Login successful!")
 
-            # ─── Step 4: REAL Phase 2 — Read back values ──
-            print("\n" + "=" * 50)
-            print("  PHASE 2: Reading Back REAL Dashboard Values")
-            print("=" * 50)
+            # ─── Step 2: Navigate to Rate Capture via sidebar ─
+            print("[Playwright] Navigating to Rate Capture via sidebar...")
+            nav_success = await navigate_to_rate_capture(page)
+            if not nav_success:
+                print("[Playwright] Could not navigate to Rate Capture!")
+                await page.screenshot(path="nav_failed.png", full_page=True)
+                return
 
-            # Wait for checkout section
-            await rc.wait_for_checkout()
+            print(f"[Playwright] On Rate Capture page: {page.url}")
+            await page.screenshot(path="rate_capture_loaded.png", full_page=True)
 
-            # Read back all rates from the actual screen
-            actual_rates = await rc.read_all_rates()
-
-            if not actual_rates:
-                print("[Phase 2] Could not read rates from dashboard. Check screenshot.")
-                await rc.take_screenshot("phase2_no_rates")
+            # ─── Step 3: Prepare extraction data ──────────
+            if not extraction_data:
+                print("[Playwright] No extraction data provided. Skipping auto-fill.")
+                print("[Playwright] Use --agreement and --rate-card to provide PDFs")
+                print("[Playwright] Or ensure backend is running for Drive mode")
                 if not headless:
-                    print("\n[Playwright] Browser open for review. Press Enter to close...")
+                    print("\n[Playwright] Browser open for manual use. Press Enter to close...")
                     input()
                 await browser.close()
                 return
 
-            # ─── Step 5: Compare PDF vs Screen ────────────
-            print("\n" + "=" * 50)
-            print("  COMPARISON: PDF vs Dashboard Screen")
-            print("=" * 50)
+            agreement = extraction_data.get("agreement", {})
+            tabs = extraction_data.get("tabs", {})
+            rate_card_path = extraction_data.get("rate_card_path", "")
 
-            # Get expected rates
-            # In Drive mode, the frontend already extracted and filled.
-            # We use the actual_rates as BOTH expected and actual —
-            # the real value of Phase 2 is confirming the screen shows the right values.
-            # For a true comparison, we read expected from the extraction data or page.
-            expected_tabs = extraction_data["tabs"] if extraction_data else {}
+            total_rates = sum(len(v) for v in tabs.items())
+            print(f"\n[Playwright] Extraction data ready:")
+            print(f"  Agreement: {agreement.get('start_date', 'N/A')} to {agreement.get('end_date', 'N/A')}")
+            print(f"  Tabs: {list(tabs.keys())}")
+            print(f"  Total rates: {total_rates}")
 
-            if not expected_tabs:
-                # Drive mode: use actual_rates as the expected baseline.
-                # This verifies that the read-back is consistent and all rates are present.
-                # For true PDF-vs-screen comparison on real GoKwik, the extraction_data
-                # would come from the backend API call made before Playwright runs.
-                expected_tabs = actual_rates
-                print(f"[Phase 2] Drive mode: using read-back as baseline ({sum(len(v) for v in actual_rates.values())} rates)")
-                print(f"[Phase 2] For true PDF comparison, use: --agreement X --rate-card Y")
+            # ─── Step 4: Fill the form ────────────────────
+            print("\n" + "=" * 55)
+            print("  AUTO-FILL: Filling Real GoKwik Dashboard")
+            print("=" * 55)
 
-            discrepancies = []
-            matched = 0
-            total = 0
+            result = await fill_gokwik(
+                merchant_name=merchant_name,
+                rate_card_path=rate_card_path,
+                agreement=agreement,
+                tabs=tabs,
+                is_new=is_new,
+                page=page,
+            )
 
-            for tab_name, expected_entries in expected_tabs.items():
-                actual_entries = actual_rates.get(tab_name, [])
-
-                for exp in expected_entries:
-                    total += 1
-                    exp_method = exp["method"]
-                    exp_rate = float(exp["rate"])
-                    exp_mode = exp.get("original_mode", exp_method)
-
-                    found = False
-                    for act in actual_entries:
-                        if act["method"] == exp_method:
-                            act_rate = float(act["rate"])
-                            if abs(act_rate - exp_rate) < 0.001:
-                                matched += 1
-                            else:
-                                discrepancies.append({
-                                    "mode": exp_mode,
-                                    "tab": tab_name,
-                                    "expected": exp_rate,
-                                    "actual": act_rate,
-                                })
-                            found = True
-                            break
-
-                    if not found:
-                        discrepancies.append({
-                            "mode": exp_mode,
-                            "tab": tab_name,
-                            "expected": exp_rate,
-                            "actual": "NOT ON SCREEN",
-                        })
-
-            # ─── Step 6: Report ───────────────────────────
-            print("\n" + "=" * 50)
-            if not discrepancies:
-                print(f"  [OK] ALL RATES VERIFIED: {matched}/{total}")
-                print(f"  [OK] Dashboard screen matches PDF exactly!")
-                print("=" * 50)
-
-                await rc.take_screenshot("phase2_all_match")
-
-                if not headless:
-                    confirm = input("\n  Confirm and save? (y/n): ").strip().lower()
-                    if confirm == 'y':
-                        await rc.click_confirm()
-                        print("  [OK] CONFIRMED AND SAVED!")
-                        await rc.take_screenshot("confirmed")
-                else:
-                    # Auto-confirm in headless mode
-                    await rc.click_confirm()
-                    print("  [OK] AUTO-CONFIRMED (headless mode)")
+            # ─── Step 5: Report results ───────────────────
+            print("\n" + "=" * 55)
+            if result["success"]:
+                print(f"  [OK] FILLED: {result['filled']} rates")
+                print(f"  [OK] Failed: {result['failed']}")
+                print(f"  [OK] Status: Draft (ready for checker)")
             else:
-                print(f"  [FAIL] DISCREPANCIES: {matched} matched, {len(discrepancies)} mismatched / {total} total")
-                print("=" * 50)
-                for d in discrepancies:
-                    print(f"  [FAIL] [{d['tab']}] {d['mode']}: Expected {d['expected']}% --> Screen shows {d['actual']}")
-                print(f"\n  --> NOT CONFIRMED. Fix manually or run again.")
+                print(f"  [FAIL] {result['message']}")
+            print("=" * 55)
 
-                await rc.take_screenshot(f"mismatch_{merchant_name.replace(' ', '_')}")
+            # Print step details
+            for step in result.get("steps", []):
+                icon = "✓" if step["status"] == "done" else "✗" if step["status"] == "failed" else "⚠"
+                print(f"  {icon} {step['text']}")
+
+            # Take final screenshot
+            await page.screenshot(path="automation_complete.png", full_page=True)
+            print(f"\n[Playwright] Screenshot: automation_complete.png")
 
             # Keep browser open for review in visible mode
             if not headless:
-                print("\n[Playwright] Browser open for review. Press Enter to close...")
+                if result["success"]:
+                    confirm = input("\n  Confirm and finalize? (y/n): ").strip().lower()
+                    if confirm == 'y':
+                        try:
+                            confirm_btn = page.get_by_role("button", name="Confirm")
+                            await confirm_btn.click()
+                            await page.wait_for_timeout(2000)
+                            print("  [OK] CONFIRMED!")
+                            await page.screenshot(path="confirmed.png", full_page=True)
+                        except Exception as e:
+                            print(f"  [WARN] Confirm failed: {e}")
+                    else:
+                        print("  Left as Draft.")
+                print("\n[Playwright] Press Enter to close browser...")
                 input()
 
         except Exception as e:
             print(f"\n[Playwright] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             try:
                 await page.screenshot(path="error_screenshot.png", full_page=True)
             except Exception:
                 pass
-            raise
         finally:
             await browser.close()
             print("[Playwright] Browser closed")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GoKwik Rate Capture Automation (Playwright)")
+    parser = argparse.ArgumentParser(description="GoKwik Rate Capture Automation")
     parser.add_argument("--merchant", required=True, help="Merchant name")
     parser.add_argument("--agreement", help="Path to Agreement PDF (local)")
     parser.add_argument("--rate-card", help="Path to Rate Card PDF (local)")
     parser.add_argument("--headless", action="store_true", help="Run without visible browser")
+    parser.add_argument("--edit", action="store_true", help="Edit existing merchant (don't create new)")
+    parser.add_argument("--user", type=int, choices=[1, 2, 3], help="Sandbox user number")
+    parser.add_argument("--email", help="Override login email")
+    parser.add_argument("--password", help="Override login password")
+    parser.add_argument("--otp", help="Override login OTP")
+    parser.add_argument("--drive", action="store_true", help="Fetch PDFs from Google Drive (requires backend)")
     args = parser.parse_args()
 
+    # Resolve login credentials
+    if args.user:
+        user = SANDBOX_USERS[args.user]
+        email = args.email or user["email"]
+        password = args.password or user["password"]
+        otp = args.otp or user["otp"]
+    else:
+        email = args.email or GOKWIK_EMAIL
+        password = args.password or GOKWIK_PASSWORD
+        otp = args.otp or GOKWIK_OTP
+
+    is_new = not args.edit
+
     print("=" * 55)
-    print("  GoKwik Rate Capture Automation (Playwright)")
+    print("  GoKwik Rate Capture Automation")
     print("=" * 55)
     print(f"  Merchant:  {args.merchant}")
-    print(f"  Mode:      {'Local PDFs' if args.agreement else 'Google Drive (via frontend)'}")
+    print(f"  Mode:      {'Local PDFs' if args.agreement else 'Google Drive' if args.drive else 'Manual'}")
+    print(f"  Action:    {'New agreement' if is_new else 'Edit existing'}")
+    print(f"  Dashboard: {GOKWIK_URL} ({email})")
     print(f"  Browser:   {'Headless' if args.headless else 'Visible'}")
-    print(f"  Dashboard: {DASHBOARD_URL}")
     print("=" * 55)
 
-    # If local PDFs provided, extract first
+    # Extract data from PDFs
     extraction_data = None
-    if args.agreement and args.rate_card:
-        extraction_data = call_extraction_api(args.agreement, args.rate_card, args.merchant)
 
-    # Run Playwright pipeline
+    if args.agreement and args.rate_card:
+        # Local PDF mode: extract via backend API
+        try:
+            extraction_data = call_extraction_api(args.agreement, args.rate_card, args.merchant)
+        except Exception as e:
+            print(f"[ERROR] Extraction failed: {e}")
+            print("[ERROR] Make sure backend is running: python run.py")
+            sys.exit(1)
+
+    elif args.drive:
+        # Google Drive mode: search + download + extract via backend
+        try:
+            extraction_data = call_drive_api(args.merchant)
+        except Exception as e:
+            print(f"[ERROR] Drive fetch failed: {e}")
+            print("[ERROR] Make sure backend is running and Drive is configured")
+            sys.exit(1)
+
+    # Run the automation pipeline
     asyncio.run(run_pipeline(
         merchant_name=args.merchant,
         headless=args.headless,
         extraction_data=extraction_data,
-        args_agreement=args.agreement,
-        args_rate_card=args.rate_card,
+        email=email,
+        password=password,
+        otp=otp,
+        is_new=is_new,
     ))
 
 

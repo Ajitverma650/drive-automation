@@ -470,57 +470,135 @@ export default function RateCapture({ onBack }) {
         />
       )}
 
-      <AgreementSection
-        agreement={agreement}
-        setAgreement={setAgreement}
-        agreementSaved={agreementSaved}
-        agreementEditMode={agreementEditMode}
-        agreementOpen={agreementOpen}
-        setAgreementOpen={setAgreementOpen}
-        fileInputRef={fileInputRef}
-        rateCardInputRef={rateCardInputRef}
-        rateCardName={rateCardName}
-        onFileUpload={handleFileUpload}
-        onRemoveFile={handleRemoveFile}
-        onRemoveRateCard={handleRemoveRateCard}
-        onSaveAgreement={handleSaveAgreement}
-        onEditAgreement={handleEditAgreement}
-        getAgreementStatus={getAgreementStatus}
-        isFieldDisabled={isFieldDisabled}
-        onDriveSelect={handleDriveSelect}
-      />
-
-      {/* ─── Checkout Section (appears after agreement saved) ─── */}
+      {/* ─── Verification Report (replaces form — shows what was extracted vs filled) ─── */}
       {agreementSaved && (
-        <CheckoutSection
-          checkout={checkout}
-          setCheckout={setCheckout}
-          tabData={tabData}
-          activePaymentTab={activePaymentTab}
-          setActivePaymentTab={setActivePaymentTab}
-          activeTabData={activeTabData}
-          checkoutOpen={checkoutOpen}
-          setCheckoutOpen={setCheckoutOpen}
-          checkoutSaved={checkoutSaved}
-          checkoutEditMode={checkoutEditMode}
-          isCheckoutDisabled={isCheckoutDisabled}
-          getCheckoutStatus={getCheckoutStatus}
-          onEditCheckout={handleEditCheckout}
-          onSaveCheckout={handleSaveCheckout}
-          updateTabField={updateTabField}
-          updateCommRow={updateCommRow}
-          onAddCommission={handleAddCommission}
-          onDeleteCommission={handleDeleteCommission}
-          onAddMore={handleAddMore}
-          commValueRef={commValueRef}
-          editingCommId={editingCommId}
-          editingValues={editingValues}
-          setEditingValues={setEditingValues}
-          onStartEdit={handleStartEdit}
-          onSaveEdit={handleSaveEdit}
-          onCancelEdit={handleCancelEdit}
-          setEditingCommId={setEditingCommId}
-        />
+        <div className="rc-verify-report" style={{ background: '#fff', borderRadius: 12, padding: 24, marginTop: 16, border: '1px solid #e5e7eb' }}>
+          {/* Agreement Summary */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+            <span style={{ fontSize: 20 }}>&#128196;</span>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Extraction & Fill Report</h3>
+            <span style={{ marginLeft: 'auto', padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600,
+              background: confirmed ? '#dcfce7' : '#fef3c7', color: confirmed ? '#166534' : '#92400e' }}>
+              {confirmed ? 'CONFIRMED' : 'DRAFT'}
+            </span>
+          </div>
+
+          {/* Agreement Details Card */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 20, padding: 16, background: '#f9fafb', borderRadius: 8 }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Merchant</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>{agreement.merchantAgreementName || 'N/A'}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Start Date</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>{agreement.startDate || 'N/A'}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>End Date</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>{agreement.endDate || 'N/A'}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Size</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>{agreement.merchantSize || 'N/A'}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>{agreement.merchantType || 'N/A'}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Products</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2 }}>{(agreement.purchasedProducts || []).join(', ') || 'N/A'}</div>
+            </div>
+          </div>
+
+          {/* Rate Summary by Tab */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 18 }}>&#128202;</span>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Extracted Rates by Payment Tab</h4>
+            <span style={{ marginLeft: 'auto', fontSize: 13, color: '#6b7280' }}>
+              {Object.values(tabData).reduce((sum, t) => sum + t.commissions.length, 0)} total rates across {Object.values(tabData).filter(t => t.commissions.length > 0).length} tabs
+            </span>
+          </div>
+
+          {/* Tab Pills */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+            {Object.entries(tabData).filter(([, t]) => t.commissions.length > 0).map(([tabName, t]) => (
+              <button key={tabName} onClick={() => setActivePaymentTab(tabName)}
+                style={{ padding: '4px 12px', borderRadius: 16, border: activePaymentTab === tabName ? '2px solid #7c3aed' : '1px solid #d1d5db',
+                  background: activePaymentTab === tabName ? '#ede9fe' : '#fff', color: activePaymentTab === tabName ? '#7c3aed' : '#374151',
+                  fontSize: 13, fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                {tabName}
+                <span style={{ background: activePaymentTab === tabName ? '#7c3aed' : '#9ca3af', color: '#fff', borderRadius: 10, padding: '0 6px', fontSize: 11, fontWeight: 700 }}>
+                  {t.commissions.length}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* Active Tab Rate Table */}
+          {tabData[activePaymentTab]?.commissions.length > 0 ? (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: '#f3f4f6' }}>
+                  <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: '#374151', borderBottom: '2px solid #e5e7eb' }}>Method</th>
+                  <th style={{ textAlign: 'left', padding: '8px 12px', fontWeight: 600, color: '#374151', borderBottom: '2px solid #e5e7eb' }}>PDF Mode (Original)</th>
+                  <th style={{ textAlign: 'right', padding: '8px 12px', fontWeight: 600, color: '#374151', borderBottom: '2px solid #e5e7eb' }}>Rate (%)</th>
+                  <th style={{ textAlign: 'center', padding: '8px 12px', fontWeight: 600, color: '#374151', borderBottom: '2px solid #e5e7eb' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tabData[activePaymentTab].commissions.map((c, i) => (
+                  <tr key={c.id || i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                    <td style={{ padding: '8px 12px', fontWeight: 500 }}>{c.method}</td>
+                    <td style={{ padding: '8px 12px', color: '#6b7280', fontStyle: 'italic' }}>{c.originalMode || c.method}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', fontSize: 14 }}>{c.value}%</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                      <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#22c55e' }}></span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div style={{ padding: 20, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>
+              No rates in {activePaymentTab} tab. Run automation to extract rates.
+            </div>
+          )}
+
+          {/* All Tabs Overview Table */}
+          {Object.values(tabData).some(t => t.commissions.length > 0) && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <span style={{ fontSize: 18 }}>&#128209;</span>
+                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Complete Rate Summary</h4>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: '#f3f4f6' }}>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 600, borderBottom: '2px solid #e5e7eb' }}>Tab</th>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 600, borderBottom: '2px solid #e5e7eb' }}>Method</th>
+                    <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, borderBottom: '2px solid #e5e7eb' }}>Rate</th>
+                    <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 600, borderBottom: '2px solid #e5e7eb' }}>PDF Mode</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(tabData).flatMap(([tabName, t]) =>
+                    t.commissions.map((c, i) => (
+                      <tr key={`${tabName}-${i}`} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                        <td style={{ padding: '5px 10px' }}>
+                          <span style={{ background: '#ede9fe', color: '#7c3aed', padding: '1px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 }}>{tabName}</span>
+                        </td>
+                        <td style={{ padding: '5px 10px', fontWeight: 500 }}>{c.method}</td>
+                        <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, fontFamily: 'monospace' }}>{c.value}%</td>
+                        <td style={{ padding: '5px 10px', color: '#6b7280', fontStyle: 'italic', fontSize: 11 }}>{c.originalMode || '-'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

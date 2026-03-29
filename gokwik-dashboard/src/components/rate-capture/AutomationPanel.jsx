@@ -463,6 +463,7 @@ export default function AutomationPanel({
         fillForm.append('agreement_json', JSON.stringify(data.agreement))
         fillForm.append('tabs_json', JSON.stringify(data.tabs))
         fillForm.append('rate_card_path', data.rate_card_path || '')
+        fillForm.append('agreement_pdf_path', data.agreement_pdf_path || '')
         fillForm.append('is_new', 'true')
 
         const fillRes = await fetch(`${API_BASE}/api/gokwik/fill`, {
@@ -508,6 +509,7 @@ export default function AutomationPanel({
           const verifyForm = new FormData()
           verifyForm.append('expected_json', JSON.stringify(data.rates.mapped))
           verifyForm.append('merchant_name', name)
+          verifyForm.append('rate_card_name', data.rate_card_file_name || data.rate_card_path || '')
 
           const verifyRes = await fetch(`${API_BASE}/api/playwright/verify`, {
             method: 'POST', body: verifyForm,
@@ -515,18 +517,60 @@ export default function AutomationPanel({
           const verifyData = await verifyRes.json()
 
           if (verifyData.success) {
-            report = verifyData.report
             updateLastStep({
               status: 'done',
-              text: `Read ${verifyData.total_read} rates from GoKwik screen`,
+              text: `Read ${verifyData.total_read || Object.values(verifyData.actual_rates || {}).reduce((s, v) => s + v.length, 0)} rates from GoKwik`,
             })
+
+            // Show rate-by-rate results
+            const vm = verifyData.matched || 0
+            const vmm = verifyData.mismatched || 0
+            const vt = verifyData.total || 0
             addStep({
-              text: `REAL verification: ${report.matched} matched, ${report.mismatched} mismatched`,
-              status: report.mismatched > 0 ? 'warning' : 'done',
+              text: `REAL GoKwik verification: ${vm}/${vt} matched, ${vmm} mismatched`,
+              status: vmm > 0 ? 'error' : 'done',
               icon: 'verify',
             })
+
+            // Show each discrepancy
+            if (verifyData.discrepancies) {
+              for (const d of verifyData.discrepancies) {
+                addStep({
+                  text: `[${d.tab}] ${d.method}: Expected ${d.expected}% → Got ${d.actual}`,
+                  status: 'error', icon: 'x',
+                })
+                await sleep(100)
+              }
+            }
+
+            // Show actual rates read from GoKwik
+            if (verifyData.actual_rates) {
+              for (const [tab, entries] of Object.entries(verifyData.actual_rates)) {
+                for (const e of entries) {
+                  addStep({
+                    text: `GoKwik [${tab}] ${e.method}: ${e.rate}%`,
+                    status: 'done', icon: 'fill',
+                  })
+                  await sleep(50)
+                }
+              }
+            }
+
+            // Show confirmation status
+            if (verifyData.confirmed) {
+              addStep({ text: 'CONFIRMED by checker (sandboxuser2)', status: 'success', icon: 'shield' })
+            } else if (vmm > 0) {
+              addStep({ text: 'NOT CONFIRMED — discrepancies found', status: 'error', icon: 'alert' })
+            }
+
+            // Build report for result display
+            report = {
+              matched: vm, mismatched: vmm, total: vt,
+              has_discrepancies: vmm > 0,
+              discrepancies: verifyData.discrepancies || [],
+            }
           } else {
-            updateLastStep({ status: 'warning', text: `GoKwik verify failed: ${verifyData.message}` })
+            updateLastStep({ status: 'warning', text: `GoKwik verify: ${verifyData.message}` })
             report = data.report // fallback to local
           }
         } catch (err) {
